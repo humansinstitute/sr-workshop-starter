@@ -10,6 +10,6 @@
 - Always check for type errors before finishing the job.
 - Ensure you always review links to images when presented in a prompt.
 - Run lint before shipping: `bun run lint` (use `bun run lint:fix` for autofixes) and keep commits clean.
-- Lint enforces async/import hygiene (no floating promises, ordered imports); fix warnings instead of silencing them.
+- Lint enforces async/import hygiene (no floating promises, ordered imports) and parses inline `<script>` blocks for syntax errors; fix warnings instead of silencing them.
 - Commit every change with a clear message so rollbacks stay easy, and avoid touching unrelated local edits.
 - Make a note of current commit before starting and after a change has completed

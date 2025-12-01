@@ -976,7 +976,7 @@ function renderPage({ showArchive, session }: { showArchive: boolean; session: S
         const { pure } = await loadNostrLibs();
         const nsec = pure.nip19.nsecEncode(stored);
         await navigator.clipboard.writeText(nsec);
-        alert("Secret key copied to clipboard!\n\nKeep this safe - anyone with this key can access your account.");
+        alert("Secret key copied to clipboard!\\n\\nKeep this safe - anyone with this key can access your account.");
       } catch (err) {
         console.error(err);
         alert("Failed to export secret key.");

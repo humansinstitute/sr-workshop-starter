@@ -7,8 +7,8 @@
     "start": "bun --hot run src/server.ts",
     "dev": "bun --hot run src/server.ts",
     "reset-db": "rm -f do-the-other-stuff.sqlite",
-    "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint": "eslint . && node scripts/check-inline-js.js",
+    "lint:fix": "eslint . --fix && node scripts/check-inline-js.js"
   },
   "dependencies": {
     "applesauce-core": "4.0.0",
