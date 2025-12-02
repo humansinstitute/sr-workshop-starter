@@ -1120,6 +1120,7 @@ function renderPage({ showArchive, session }: { showArchive: boolean; session: S
       }
       await fetchSummaries();
       refreshUI();
+      window.location.reload();
     }
 
     const exportSecretBtn = document.querySelector("[data-export-secret]");
