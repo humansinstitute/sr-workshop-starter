@@ -1,7 +1,6 @@
 import { Database } from "bun:sqlite";
 
-export type TodoState = "new" | "ready" | "in_progress" | "done";
-export type TodoPriority = "rock" | "pebble" | "sand";
+import type { TodoPriority, TodoState } from "./types";
 
 export type Todo = {
   id: number;
@@ -28,7 +27,7 @@ export type Summary = {
   updated_at: string;
 };
 
-const db = new Database("do-the-other-stuff.sqlite");
+const db = new Database(Bun.env.DB_PATH || "do-the-other-stuff.sqlite");
 
 db.run(`
   CREATE TABLE IF NOT EXISTS todos (
@@ -260,4 +259,10 @@ export function getLatestSummaries(owner: string, today: string, weekStart: stri
   const day = latestDaySummaryStmt.get(owner, today) as Summary | undefined;
   const week = latestWeekSummaryStmt.get(owner, weekStart, weekEnd) as Summary | undefined;
   return { day: day ?? null, week: week ?? null };
+}
+
+export function resetDatabase() {
+  db.run("DELETE FROM todos");
+  db.run("DELETE FROM ai_summaries");
+  db.run("DELETE FROM sqlite_sequence WHERE name IN ('todos', 'ai_summaries')");
 }
