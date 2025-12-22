@@ -137,6 +137,8 @@ function contentTypeFor(fileName: string) {
     case ".webmanifest":
     case ".json":
       return "application/manifest+json";
+    case ".js":
+      return "text/javascript; charset=utf-8";
     default:
       return "application/octet-stream";
   }
