@@ -1,14 +1,18 @@
 import { execSync } from "child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 
-const serverPath = resolve("src/server.ts");
-const source = readFileSync(serverPath, "utf8");
-const scriptMatches = [...source.matchAll(/<script(?:[^>]*)>([\s\S]*?)<\/script>/gi)];
+const templatePaths = ["src/server.ts", "src/render/home.ts"].map((path) => resolve(path));
+const scriptMatches = templatePaths
+  .filter((path) => existsSync(path))
+  .flatMap((path) => {
+    const source = readFileSync(path, "utf8");
+    return [...source.matchAll(/<script(?:[^>]*)>([\s\S]*?)<\/script>/gi)];
+  });
 
 if (scriptMatches.length === 0) {
-  console.error("No <script> blocks found in src/server.ts.");
+  console.error("No <script> blocks found in template files.");
   process.exit(1);
 }
 

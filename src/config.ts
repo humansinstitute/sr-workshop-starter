@@ -17,4 +17,6 @@ export const STATIC_FILES = new Map<string, string>([
   ["/icon-192.png", "icon-192.png"],
   ["/icon-512.png", "icon-512.png"],
   ["/manifest.webmanifest", "manifest.webmanifest"],
+  ["/app.js", "app.js"],
+  ["/app.css", "app.css"],
 ]);
