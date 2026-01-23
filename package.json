@@ -1,30 +1,12 @@
 {
   "name": "do-the-other-stuff",
-  "version": "0.1.0",
-  "description": "Minimal Bun + TypeScript + SQLite todo app",
+  "version": "0.2.0",
+  "description": "Local-first todo app with Nostr auth and encrypted IndexedDB storage",
   "scripts": {
-    "setup": "bun install",
-    "start": "bun --hot run src/server.ts",
-    "dev": "bun --hot run src/server.ts",
-    "reset-db": "rm -f do-the-other-stuff.sqlite",
-    "lint": "eslint . && node scripts/check-inline-js.js",
-    "lint:fix": "eslint . --fix && node scripts/check-inline-js.js"
-  },
-  "dependencies": {
-    "applesauce-core": "4.0.0",
-    "applesauce-relay": "4.0.0",
-    "bun-types": "latest",
-    "nostr-tools": "2.7.2",
-    "rxjs": "7.8.1"
+    "dev": "bunx vite",
+    "build": "bunx vite build",
+    "preview": "bunx vite preview"
   },
   "type": "module",
-  "license": "MIT",
-  "devDependencies": {
-    "@typescript-eslint/eslint-plugin": "^8.48.0",
-    "@typescript-eslint/parser": "^8.48.0",
-    "eslint": "^9.39.1",
-    "eslint-import-resolver-typescript": "^4.4.4",
-    "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-n": "^17.23.1"
-  }
+  "license": "MIT"
 }
