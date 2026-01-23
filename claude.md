@@ -17,12 +17,14 @@ This is a **local-first, static-only** application. There is no backend server -
 ## Key Files
 
 - `index.html` - Single page app shell with Alpine.js
-- `js/app.js` - Main application logic, Alpine.js store
-- `js/db.js` - Dexie database with NIP-44 encrypted storage
-- `js/nostr.js` - Nostr authentication and encryption helpers
-- `js/nostr-cvm.js` - Nostr CVM integration
-- `js/utils.js` - Utility functions
-- `css/app.css` - Application styles
+- `public/js/app.js` - Main application logic, Alpine.js store
+- `public/js/db.js` - Dexie database with NIP-44 encrypted storage
+- `public/js/nostr.js` - Nostr authentication and encryption helpers
+- `public/js/nostr-cvm.js` - Nostr CVM integration
+- `public/js/utils.js` - Utility functions
+- `public/css/app.css` - Application styles
+- `public/sw.js` - Service worker for offline PWA support
+- `public/manifest.webmanifest` - PWA manifest
 - `vite.config.js` - Vite configuration
 
 ## Data Storage
