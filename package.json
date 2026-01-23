@@ -1,5 +1,5 @@
 {
-  "name": "do-the-other-stuff",
+  "name": "super-based-todo",
   "version": "0.2.0",
   "description": "Local-first todo app with Nostr auth and encrypted IndexedDB storage",
   "scripts": {

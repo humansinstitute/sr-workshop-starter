@@ -3,16 +3,26 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Other Stuff To Do</title>
+  <title>Super Based Todo</title>
+  <meta name="description" content="Local-first todo app with Nostr auth and encrypted storage" />
   <meta name="theme-color" content="#111111" />
-  <meta name="application-name" content="Other Stuff To Do" />
+  <meta name="application-name" content="Super Based Todo" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Based Todo" />
+
   <link rel="stylesheet" href="/css/app.css" />
 </head>
 <body x-data x-cloak>
   <main class="app-shell">
     <!-- Header -->
     <header class="page-header">
-      <h1>Other Stuff To Do</h1>
+      <h1>Super Based Todo</h1>
       <div class="session-controls" x-show="$store.app.isLoggedIn">
         <button
           class="avatar-chip"
@@ -285,5 +295,16 @@
   </main>
 
   <script type="module" src="/js/app.js"></script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => console.log('SW registered:', reg.scope))
+          .catch((err) => console.log('SW registration failed:', err));
+      });
+    }
+  </script>
 </body>
 </html>
