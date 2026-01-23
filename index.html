@@ -84,8 +84,9 @@
             placeholder="nostrconnect://... or name@example.com"
             autocomplete="off"
           />
-          <button class="bunker-submit" type="submit" :disabled="$store.app.isLoggingIn">Connect bunker</button>
+          <button class="auth-option" type="submit" :disabled="$store.app.isLoggingIn">Connect Bunker</button>
         </form>
+        <hr class="auth-divider" />
         <form class="auth-form" @submit.prevent="$store.app.login('secret', $refs.secretInput.value); $refs.secretInput.value = ''">
           <input
             x-ref="secretInput"
@@ -94,7 +95,7 @@
             placeholder="nsec1..."
             autocomplete="off"
           />
-          <button class="bunker-submit" type="submit" :disabled="$store.app.isLoggingIn">Sign in with secret</button>
+          <button class="auth-option" type="submit" :disabled="$store.app.isLoggingIn">BYO Nsec</button>
         </form>
       </details>
       <p class="auth-error" x-show="$store.app.loginError" x-text="$store.app.loginError"></p>

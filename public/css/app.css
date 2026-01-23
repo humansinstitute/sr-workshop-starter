@@ -491,6 +491,15 @@ summary::-webkit-details-marker {
   border: 1px solid #ccc;
   font-size: 0.95rem;
 }
+.auth-advanced .auth-option {
+  width: 100%;
+}
+.auth-divider {
+  width: 80%;
+  border: none;
+  border-top: 1px solid #ddd;
+  margin: 1rem auto;
+}
 .bunker-submit {
   align-self: flex-start;
   padding: 0.5rem 1rem;
