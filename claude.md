@@ -13,6 +13,9 @@ This is a **local-first, static-only** application. There is no backend server -
 - Run `bun dev` for Vite dev server with hot reload (uses bunx)
 - Run `bun build` to generate static files in `dist/`
 - The app can be deployed to any static host (Netlify, Vercel, GitHub Pages, etc.)
+- You should ensure logs are written to a file in <project_dir>/tmp/logs/...log that you can read directly in the project structure. 
+- You should flush this before we conduct a new test.
+- You should always read the logs when fixing bugs
 
 ## Key Files
 
