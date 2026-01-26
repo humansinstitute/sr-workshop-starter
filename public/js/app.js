@@ -35,6 +35,22 @@ import {
   decodeTeleportBlob,
   decryptWithUnlockCode,
 } from './keyteleport.js';
+import {
+  SuperBasedClient,
+  parseToken,
+  verifyToken,
+  saveToken,
+  loadToken,
+  clearToken,
+  truncateNpub,
+} from './superbased.js';
+import {
+  formatForSync,
+  mergeRemoteRecords,
+  importParsedRecords,
+  forceImportRecord,
+  setLastSyncTime,
+} from './db.js';
 
 // Make Alpine available globally for debugging
 window.Alpine = Alpine;
@@ -67,6 +83,19 @@ Alpine.store('app', {
   teleportError: null,
   isProcessingTeleport: false,
   pendingTeleport: null, // Stores { encryptedNsec, npub } during unlock
+
+  // SuperBased sync state
+  showSuperBasedModal: false,
+  superbasedTokenInput: '',
+  superbasedConfig: null, // Parsed token config
+  superbasedClient: null,
+  superbasedSyncStatus: null, // 'connecting' | 'uploading' | 'downloading' | 'merging' | 'done' | 'error'
+  superbasedError: null,
+  superbasedConflicts: [], // Array of conflict objects for user resolution
+  superbasedHasToken: false, // Whether a token is saved
+  superbasedBackgroundSyncing: false, // Background sync in progress
+  superbasedSyncInterval: null, // Interval ID for periodic sync
+  superbasedLastBackgroundSync: null, // Timestamp of last background sync
 
   // New todo input
   newTodoTitle: '',
@@ -173,6 +202,8 @@ Alpine.store('app', {
         await this.loadTodos();
         // Fetch profile in background
         this.loadProfile(storedAuth.pubkey);
+        // Check for saved SuperBased token and start background sync
+        this.initBackgroundSync();
         return;
       }
     }
@@ -209,6 +240,9 @@ Alpine.store('app', {
 
       // Fetch profile in background (don't block login)
       this.loadProfile(pubkey);
+
+      // Check for saved SuperBased token and start background sync
+      this.initBackgroundSync();
     } catch (err) {
       console.error('Login failed:', err);
       this.loginError = err.message || 'Login failed.';
@@ -218,6 +252,9 @@ Alpine.store('app', {
   },
 
   async logout() {
+    // Stop background sync if running
+    this.stopBackgroundSync();
+
     this.session = null;
     this.profile = null;
     this.todos = [];
@@ -460,6 +497,326 @@ Alpine.store('app', {
     this.teleportUnlockCode = '';
     this.teleportError = null;
   },
+
+  // ===========================================
+  // SuperBased Sync Methods
+  // ===========================================
+
+  openSuperBasedModal() {
+    this.showAvatarMenu = false;
+    this.superbasedError = null;
+    this.superbasedSyncStatus = null;
+    this.superbasedConflicts = [];
+
+    // Check for saved token
+    const savedToken = loadToken();
+    if (savedToken) {
+      this.superbasedTokenInput = savedToken;
+      this.superbasedHasToken = true;
+      try {
+        this.superbasedConfig = parseToken(savedToken);
+      } catch (err) {
+        this.superbasedConfig = null;
+        this.superbasedHasToken = false;
+      }
+    } else {
+      this.superbasedTokenInput = '';
+      this.superbasedConfig = null;
+      this.superbasedHasToken = false;
+    }
+
+    this.showSuperBasedModal = true;
+  },
+
+  closeSuperBasedModal() {
+    this.showSuperBasedModal = false;
+    this.superbasedTokenInput = '';
+    this.superbasedConfig = null;
+    this.superbasedError = null;
+    this.superbasedSyncStatus = null;
+    this.superbasedConflicts = [];
+    if (this.superbasedClient) {
+      this.superbasedClient.disconnect();
+      this.superbasedClient = null;
+    }
+  },
+
+  async parseSuperbaedToken() {
+    this.superbasedError = null;
+    this.superbasedConfig = null;
+
+    const token = this.superbasedTokenInput.trim();
+    if (!token) {
+      this.superbasedError = 'Please paste a token';
+      return;
+    }
+
+    try {
+      // Parse token
+      const config = parseToken(token);
+
+      // Verify signature
+      const valid = await verifyToken(token);
+      if (!valid) {
+        this.superbasedError = 'Invalid token signature';
+        return;
+      }
+
+      this.superbasedConfig = config;
+      saveToken(token);
+      this.superbasedHasToken = true;
+    } catch (err) {
+      this.superbasedError = err.message;
+    }
+  },
+
+  clearSuperbasedToken() {
+    // Stop background sync when clearing token
+    this.stopBackgroundSync();
+
+    clearToken();
+    this.superbasedTokenInput = '';
+    this.superbasedConfig = null;
+    this.superbasedHasToken = false;
+    this.superbasedError = null;
+  },
+
+  async syncToSuperbased() {
+    if (!this.superbasedConfig || !this.session?.npub) return;
+
+    this.superbasedError = null;
+    this.superbasedSyncStatus = 'connecting';
+
+    try {
+      // Create client and connect
+      const token = this.superbasedTokenInput.trim() || loadToken();
+      this.superbasedClient = new SuperBasedClient(token);
+      await this.superbasedClient.connect();
+
+      // Check health
+      await this.superbasedClient.health();
+
+      // Format local todos for sync
+      this.superbasedSyncStatus = 'uploading';
+      const records = await formatForSync(this.session.npub);
+
+      if (records.length === 0) {
+        this.superbasedError = 'No todos to sync';
+        this.superbasedSyncStatus = null;
+        return;
+      }
+
+      // Upload to SuperBased
+      const result = await this.superbasedClient.syncRecords(records);
+      console.log('Sync result:', result);
+
+      // Update last sync time
+      setLastSyncTime(this.session.npub, new Date().toISOString());
+
+      this.superbasedSyncStatus = 'done';
+
+      // Start background sync after successful manual sync
+      this.startBackgroundSync();
+    } catch (err) {
+      console.error('SuperBased sync failed:', err);
+      this.superbasedError = err.message;
+      this.superbasedSyncStatus = 'error';
+    }
+  },
+
+  async downloadFromSuperbased() {
+    if (!this.superbasedConfig || !this.session?.npub) return;
+
+    this.superbasedError = null;
+    this.superbasedSyncStatus = 'connecting';
+
+    try {
+      // Create client and connect
+      const token = this.superbasedTokenInput.trim() || loadToken();
+      this.superbasedClient = new SuperBasedClient(token);
+      await this.superbasedClient.connect();
+
+      // Fetch records
+      this.superbasedSyncStatus = 'downloading';
+      const { records } = await this.superbasedClient.fetchRecords({ collection: 'todos' });
+
+      if (!records || records.length === 0) {
+        this.superbasedError = 'No records found on server';
+        this.superbasedSyncStatus = null;
+        return;
+      }
+
+      // Merge with local data
+      this.superbasedSyncStatus = 'merging';
+      const { toImport, conflicts, skipped } = await mergeRemoteRecords(this.session.npub, records);
+
+      console.log('Merge result:', { toImport: toImport.length, conflicts: conflicts.length, skipped: skipped.length });
+
+      // Import non-conflicting records
+      if (toImport.length > 0) {
+        await importParsedRecords(toImport);
+      }
+
+      // Handle conflicts
+      if (conflicts.length > 0) {
+        this.superbasedConflicts = conflicts;
+        this.superbasedSyncStatus = 'conflicts';
+        return;
+      }
+
+      // Update last sync time
+      setLastSyncTime(this.session.npub, new Date().toISOString());
+
+      // Reload todos
+      await this.loadTodos();
+
+      this.superbasedSyncStatus = 'done';
+
+      // Start background sync after successful download
+      this.startBackgroundSync();
+    } catch (err) {
+      console.error('SuperBased download failed:', err);
+      this.superbasedError = err.message;
+      this.superbasedSyncStatus = 'error';
+    }
+  },
+
+  async resolveConflict(conflict, choice) {
+    // choice: 'keep_local' | 'use_remote'
+    if (choice === 'use_remote') {
+      await forceImportRecord(conflict.remote);
+    }
+    // Remove from conflicts list
+    this.superbasedConflicts = this.superbasedConflicts.filter(c => c !== conflict);
+
+    // If no more conflicts, finish up
+    if (this.superbasedConflicts.length === 0) {
+      setLastSyncTime(this.session.npub, new Date().toISOString());
+      await this.loadTodos();
+      this.superbasedSyncStatus = 'done';
+    }
+  },
+
+  async resolveAllConflicts(choice) {
+    // choice: 'keep_all_local' | 'use_all_remote'
+    if (choice === 'use_all_remote') {
+      for (const conflict of this.superbasedConflicts) {
+        await forceImportRecord(conflict.remote);
+      }
+    }
+    this.superbasedConflicts = [];
+    setLastSyncTime(this.session.npub, new Date().toISOString());
+    await this.loadTodos();
+    this.superbasedSyncStatus = 'done';
+
+    // Start background sync after resolving conflicts
+    this.startBackgroundSync();
+  },
+
+  // Initialize background sync from saved token (called on app startup)
+  initBackgroundSync() {
+    const savedToken = loadToken();
+    if (!savedToken) return;
+
+    try {
+      this.superbasedConfig = parseToken(savedToken);
+      this.superbasedHasToken = true;
+      console.log('SuperBased: found saved token, starting background sync');
+      this.startBackgroundSync();
+    } catch (err) {
+      console.error('SuperBased: invalid saved token:', err.message);
+      clearToken();
+    }
+  },
+
+  // Background sync - runs quietly without UI changes
+  async backgroundSync() {
+    // Skip if not configured or already syncing
+    if (!this.superbasedConfig || !this.session?.npub) return;
+    if (this.superbasedBackgroundSyncing) return;
+    if (this.superbasedSyncStatus) return; // Manual sync in progress
+
+    this.superbasedBackgroundSyncing = true;
+    console.log('SuperBased: background sync starting');
+
+    try {
+      const token = loadToken();
+      if (!token) return;
+
+      const client = new SuperBasedClient(token);
+      await client.connect();
+
+      // Upload local changes
+      const records = await formatForSync(this.session.npub);
+      if (records.length > 0) {
+        await client.syncRecords(records);
+        console.log('SuperBased: uploaded', records.length, 'records');
+      }
+
+      // Download remote changes
+      const { records: remoteRecords } = await client.fetchRecords({ collection: 'todos' });
+      if (remoteRecords && remoteRecords.length > 0) {
+        const { toImport, skipped } = await mergeRemoteRecords(this.session.npub, remoteRecords);
+        if (toImport.length > 0) {
+          await importParsedRecords(toImport);
+          await this.loadTodos();
+          console.log('SuperBased: imported', toImport.length, 'records');
+        }
+      }
+
+      setLastSyncTime(this.session.npub, new Date().toISOString());
+      this.superbasedLastBackgroundSync = Date.now();
+      console.log('SuperBased: background sync complete');
+
+      await client.disconnect();
+    } catch (err) {
+      console.error('SuperBased: background sync failed:', err.message);
+    } finally {
+      this.superbasedBackgroundSyncing = false;
+    }
+  },
+
+  // Start periodic background sync (every 30 seconds)
+  startBackgroundSync() {
+    if (this.superbasedSyncInterval) return;
+    if (!this.superbasedConfig) return;
+
+    console.log('SuperBased: starting periodic sync (30s interval)');
+
+    // Initial sync after short delay
+    setTimeout(() => this.backgroundSync(), 2000);
+
+    // Set up interval
+    this.superbasedSyncInterval = setInterval(() => {
+      if (!document.hidden) {
+        this.backgroundSync();
+      }
+    }, 30000);
+
+    // Listen for visibility changes
+    document.addEventListener('visibilitychange', this._handleVisibilityChange);
+  },
+
+  // Stop periodic background sync
+  stopBackgroundSync() {
+    if (this.superbasedSyncInterval) {
+      clearInterval(this.superbasedSyncInterval);
+      this.superbasedSyncInterval = null;
+      console.log('SuperBased: stopped periodic sync');
+    }
+    document.removeEventListener('visibilitychange', this._handleVisibilityChange);
+  },
+
+  // Handle visibility change (sync when returning to app)
+  _handleVisibilityChange() {
+    const store = Alpine.store('app');
+    if (!document.hidden && store.superbasedConfig) {
+      console.log('SuperBased: app became visible, triggering sync');
+      store.backgroundSync();
+    }
+  },
+
+  truncateNpub,
 });
 
 // Todo item component

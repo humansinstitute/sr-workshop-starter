@@ -150,5 +150,148 @@ export async function importEncryptedTodos(encryptedTodos) {
   return db.todos.bulkPut(encryptedTodos);
 }
 
+// ===========================================
+// SuperBased Sync Helpers
+// ===========================================
+
+/**
+ * Format local encrypted todos for SuperBased sync
+ * Maps Dexie structure to SuperBased record format
+ */
+export async function formatForSync(owner) {
+  const encryptedTodos = await db.todos.where('owner').equals(owner).toArray();
+
+  return encryptedTodos.map(todo => ({
+    record_id: `todo-${todo.id}`,
+    collection: 'todos',
+    encrypted_data: JSON.stringify({
+      id: todo.id,
+      owner: todo.owner,
+      payload: todo.payload,
+    }),
+    metadata: {
+      local_id: todo.id,
+    },
+  }));
+}
+
+/**
+ * Parse SuperBased record back to local format
+ */
+function parseRemoteRecord(record) {
+  try {
+    const data = JSON.parse(record.encrypted_data);
+    return {
+      id: data.id,
+      owner: data.owner,
+      payload: data.payload,
+      remote_id: record.id,
+      record_id: record.record_id,
+      updated_at: record.updated_at,
+    };
+  } catch {
+    console.error('Failed to parse remote record:', record.record_id);
+    return null;
+  }
+}
+
+/**
+ * Compare two encrypted payloads
+ * Returns true if they are identical
+ */
+function payloadsMatch(payload1, payload2) {
+  return payload1 === payload2;
+}
+
+/**
+ * Merge remote records with local data
+ * Returns { toImport, conflicts, skipped }
+ */
+export async function mergeRemoteRecords(owner, remoteRecords) {
+  const localTodos = await db.todos.where('owner').equals(owner).toArray();
+
+  // Build lookup maps
+  const localById = new Map();
+  const localByPayload = new Map();
+  for (const todo of localTodos) {
+    localById.set(todo.id, todo);
+    localByPayload.set(todo.payload, todo);
+  }
+
+  const toImport = [];
+  const conflicts = [];
+  const skipped = [];
+
+  for (const remote of remoteRecords) {
+    const parsed = parseRemoteRecord(remote);
+    if (!parsed) continue;
+
+    // Check if this exact payload already exists (duplicate)
+    if (localByPayload.has(parsed.payload)) {
+      skipped.push({
+        remote: parsed,
+        local: localByPayload.get(parsed.payload),
+        reason: 'identical_payload',
+      });
+      continue;
+    }
+
+    // Check if we have a local record with the same ID
+    const localMatch = localById.get(parsed.id);
+    if (localMatch) {
+      // Different payloads for same ID - conflict
+      conflicts.push({
+        remote: parsed,
+        local: localMatch,
+      });
+      continue;
+    }
+
+    // New record - import it
+    toImport.push(parsed);
+  }
+
+  return { toImport, conflicts, skipped };
+}
+
+/**
+ * Import parsed remote records (no conflict check)
+ */
+export async function importParsedRecords(records) {
+  const toInsert = records.map(r => ({
+    id: r.id,
+    owner: r.owner,
+    payload: r.payload,
+  }));
+  return db.todos.bulkPut(toInsert);
+}
+
+/**
+ * Force import a single record, replacing local
+ */
+export async function forceImportRecord(record) {
+  return db.todos.put({
+    id: record.id,
+    owner: record.owner,
+    payload: record.payload,
+  });
+}
+
+/**
+ * Get last sync timestamp for incremental sync
+ */
+export function getLastSyncTime(owner) {
+  const key = `superbased_last_sync_${owner}`;
+  return localStorage.getItem(key);
+}
+
+/**
+ * Set last sync timestamp
+ */
+export function setLastSyncTime(owner, timestamp) {
+  const key = `superbased_last_sync_${owner}`;
+  localStorage.setItem(key, timestamp);
+}
+
 // Export db for direct access if needed
 export { db };
