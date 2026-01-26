@@ -66,6 +66,7 @@ export async function createTodo({ title, description = '', priority = 'sand', o
     deleted: 0,
     done: 0,
     created_at: now,
+    updated_at: now,
   };
 
   const encryptedTodo = await encryptTodo(todoData);
@@ -98,6 +99,9 @@ export async function updateTodo(id, updates) {
   } else if (updates.state && updates.state !== 'done') {
     updates.done = 0;
   }
+
+  // Always update the timestamp
+  updates.updated_at = new Date().toISOString();
 
   const updated = { ...existing, ...updates };
   const encryptedTodo = await encryptTodo(updated);
@@ -205,17 +209,19 @@ function payloadsMatch(payload1, payload2) {
 
 /**
  * Merge remote records with local data
+ * Cloud wins if newer - overwrites local with newer cloud records
  * Returns { toImport, conflicts, skipped }
  */
 export async function mergeRemoteRecords(owner, remoteRecords) {
-  const localTodos = await db.todos.where('owner').equals(owner).toArray();
+  const localEncrypted = await db.todos.where('owner').equals(owner).toArray();
+  const localDecrypted = await decryptTodos(localEncrypted);
 
   // Build lookup maps
   const localById = new Map();
   const localByPayload = new Map();
-  for (const todo of localTodos) {
+  for (const todo of localDecrypted) {
     localById.set(todo.id, todo);
-    localByPayload.set(todo.payload, todo);
+    localByPayload.set(localEncrypted.find(e => e.id === todo.id)?.payload, todo);
   }
 
   const toImport = [];
@@ -239,11 +245,22 @@ export async function mergeRemoteRecords(owner, remoteRecords) {
     // Check if we have a local record with the same ID
     const localMatch = localById.get(parsed.id);
     if (localMatch) {
-      // Different payloads for same ID - conflict
-      conflicts.push({
-        remote: parsed,
-        local: localMatch,
-      });
+      // Compare timestamps - cloud wins if newer
+      const remoteTime = new Date(parsed.updated_at).getTime();
+      const localTime = localMatch.updated_at ? new Date(localMatch.updated_at).getTime() : 0;
+
+      if (remoteTime > localTime) {
+        // Cloud is newer - import it (will overwrite local)
+        toImport.push(parsed);
+        console.log(`Cloud record ${parsed.id} is newer, will overwrite local`);
+      } else {
+        // Local is same or newer - skip
+        skipped.push({
+          remote: parsed,
+          local: localMatch,
+          reason: 'local_is_newer',
+        });
+      }
       continue;
     }
 

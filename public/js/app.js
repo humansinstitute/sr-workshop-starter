@@ -779,7 +779,7 @@ Alpine.store('app', {
     }
   },
 
-  // Background sync - runs quietly without UI changes
+  // Background sync - download only, updates local with newer cloud records
   async backgroundSync() {
     // Skip if not configured or already syncing
     if (!this.superbasedConfig || !this.session?.npub) return;
@@ -787,7 +787,7 @@ Alpine.store('app', {
     if (this.superbasedSyncStatus) return; // Manual sync in progress
 
     this.superbasedBackgroundSyncing = true;
-    console.log('SuperBased: background sync starting');
+    console.log('SuperBased: background download starting');
 
     try {
       const token = loadToken();
@@ -796,27 +796,20 @@ Alpine.store('app', {
       const client = new SuperBasedClient(token);
       await client.connect();
 
-      // Upload local changes
-      const records = await formatForSync(this.session.npub);
-      if (records.length > 0) {
-        await client.syncRecords(records);
-        console.log('SuperBased: uploaded', records.length, 'records');
-      }
-
-      // Download remote changes
+      // Download remote changes only - cloud overwrites local if newer
       const { records: remoteRecords } = await client.fetchRecords({ collection: 'todos' });
       if (remoteRecords && remoteRecords.length > 0) {
         const { toImport, skipped } = await mergeRemoteRecords(this.session.npub, remoteRecords);
         if (toImport.length > 0) {
           await importParsedRecords(toImport);
           await this.loadTodos();
-          console.log('SuperBased: imported', toImport.length, 'records');
+          console.log('SuperBased: imported', toImport.length, 'newer records from cloud');
         }
       }
 
       setLastSyncTime(this.session.npub, new Date().toISOString());
       this.superbasedLastBackgroundSync = Date.now();
-      console.log('SuperBased: background sync complete');
+      console.log('SuperBased: background download complete');
 
       await client.disconnect();
     } catch (err) {
