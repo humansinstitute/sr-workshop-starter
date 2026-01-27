@@ -722,14 +722,19 @@ Alpine.store('app', {
 
   // Trigger sync after a local change (debounced to batch rapid changes)
   syncAfterChange() {
+    console.log('syncAfterChange called, superbasedConfig:', !!this.superbasedConfig);
     // Skip if no token configured
-    if (!this.superbasedConfig) return;
+    if (!this.superbasedConfig) {
+      console.log('syncAfterChange: no config, skipping');
+      return;
+    }
 
     // Clear existing debounce timer
     if (this.superbasedChangeDebounce) {
       clearTimeout(this.superbasedChangeDebounce);
     }
 
+    console.log('syncAfterChange: scheduling upload in 2s');
     // Debounce: wait 2 seconds after last change before syncing
     this.superbasedChangeDebounce = setTimeout(() => {
       this.superbasedChangeDebounce = null;
@@ -739,9 +744,19 @@ Alpine.store('app', {
 
   // Upload-only sync (doesn't download, for quick change sync)
   async uploadChanges() {
-    if (!this.superbasedConfig || !this.session?.npub) return;
-    if (this.superbasedBackgroundSyncing) return;
-    if (this.superbasedSyncStatus) return; // Manual sync in progress
+    console.log('uploadChanges called');
+    if (!this.superbasedConfig || !this.session?.npub) {
+      console.log('uploadChanges: no config or session, skipping');
+      return;
+    }
+    if (this.superbasedBackgroundSyncing) {
+      console.log('uploadChanges: background sync in progress, skipping');
+      return;
+    }
+    if (this.superbasedSyncStatus) {
+      console.log('uploadChanges: manual sync in progress, skipping');
+      return;
+    }
 
     console.log('SuperBased: uploading changes');
 
@@ -758,8 +773,12 @@ Alpine.store('app', {
         console.log('SuperBased: uploaded', records.length, 'records');
 
         // Publish notification to other devices
+        console.log('SuperBased: publishing notification, notifier exists:', !!this.superbasedSyncNotifier);
         if (this.superbasedSyncNotifier) {
-          await this.superbasedSyncNotifier.publish();
+          const published = await this.superbasedSyncNotifier.publish();
+          console.log('SuperBased: notification published:', published);
+        } else {
+          console.log('SuperBased: no notifier, skipping publish');
         }
       }
 

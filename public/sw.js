@@ -1,4 +1,4 @@
-const CACHE_NAME = 'super-based-todo-v23';
+const CACHE_NAME = 'super-based-todo-v25';
 
 const ASSETS_TO_CACHE = [
   '/',

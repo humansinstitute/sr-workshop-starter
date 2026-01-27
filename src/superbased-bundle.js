@@ -316,13 +316,13 @@ class SyncNotifier {
       const subHandle = this.relayPool.subscribe(
         [nostrFilter],
         {
-          onevent: (event) => {
+          onEvent: (event) => {
             subscriber.next(event);
           },
-          oneose: () => {
+          onEose: () => {
             console.log('SyncNotifier: received EOSE');
           },
-          onclose: (reason) => {
+          onClose: (reason) => {
             console.log('SyncNotifier: subscription closed:', reason);
           },
         }
