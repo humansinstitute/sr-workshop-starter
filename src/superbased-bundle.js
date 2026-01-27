@@ -7,10 +7,9 @@ import {
   PrivateKeySigner,
   ApplesauceRelayPool,
 } from '@contextvm/sdk';
-import { nip19, verifyEvent, finalizeEvent, SimplePool } from 'nostr-tools';
+import { nip19, verifyEvent, finalizeEvent } from 'nostr-tools';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import { Observable, Subject, filter, map, takeUntil } from 'rxjs';
-import * as nip44 from 'nostr-tools/nip44';
 
 // Sync notification constants
 const SYNC_NOTIFY_KIND = 30080;
@@ -214,76 +213,35 @@ function getDeviceId() {
 }
 
 // ============================================
-// RxJS Subscription wrapper for SimplePool
-// ============================================
-
-function subscribeToRelays(pool, relays, nostrFilter) {
-  return new Observable((subscriber) => {
-    let sub = null;
-    try {
-      sub = pool.subscribeMany(relays, [nostrFilter], {
-        onevent(event) {
-          subscriber.next({ type: 'event', event });
-        },
-        oneose() {
-          subscriber.next({ type: 'eose' });
-        },
-        onclose(reasons) {
-          subscriber.next({ type: 'closed', reason: reasons?.join(', ') });
-        },
-      });
-    } catch (err) {
-      console.error('SyncNotifier: subscription failed:', err);
-      subscriber.next({ type: 'closed', reason: String(err) });
-    }
-
-    return () => {
-      if (sub) {
-        try {
-          sub.close();
-        } catch {}
-      }
-    };
-  });
-}
-
-function onlyEvents() {
-  return (source) =>
-    source.pipe(
-      filter((msg) => msg.type === 'event' && !!msg.event),
-      map((msg) => msg.event)
-    );
-}
-
-// ============================================
-// Sync Notifier - publishes and subscribes to sync events
+// Sync Notifier - uses ApplesauceRelayPool and PrivateKeySigner (same as CVM)
 // ============================================
 
 class SyncNotifier {
   constructor(options) {
     this.userPubkeyHex = options.userPubkeyHex;
     this.appNpub = options.appNpub;
-    this.privateKeyHex = options.privateKeyHex; // For signing and encryption
+    this.privateKeyHex = options.privateKeyHex;
     this.useExtension = options.useExtension;
 
     this.deviceId = getDeviceId();
-    this.pool = new SimplePool();
+    this.signer = null;
+    this.relayPool = null;
     this.stopSignal = new Subject();
     this.subscription = null;
     this.lastPublishTime = 0;
     this.onSyncNeeded = null;
 
-    console.log('SyncNotifier: initialized with deviceId:', this.deviceId);
-  }
-
-  // Get conversation key for NIP-44 encryption (encrypt to self)
-  _getConversationKey() {
-    if (!this.privateKeyHex) {
-      throw new Error('Cannot encrypt without private key');
+    // Create signer (same pattern as CVM client)
+    if (this.privateKeyHex) {
+      this.signer = new PrivateKeySigner(this.privateKeyHex);
+    } else if (this.useExtension) {
+      this.signer = new ExtensionSigner(this.userPubkeyHex);
     }
-    const privKeyBytes = hexToBytes(this.privateKeyHex);
-    const pubKeyBytes = hexToBytes(this.userPubkeyHex);
-    return nip44.v2.utils.getConversationKey(privKeyBytes, pubKeyBytes);
+
+    // Create relay pool (same as CVM uses)
+    this.relayPool = new ApplesauceRelayPool(NOTIFICATION_RELAYS);
+
+    console.log('SyncNotifier: initialized with deviceId:', this.deviceId);
   }
 
   // Publish a sync notification
@@ -304,16 +262,11 @@ class SyncNotifier {
         timestamp: now,
       };
 
-      // Encrypt payload to user's pubkey
-      let encrypted;
-      if (this.useExtension && window.nostr?.nip44?.encrypt) {
-        encrypted = await window.nostr.nip44.encrypt(this.userPubkeyHex, JSON.stringify(payload));
-      } else if (this.privateKeyHex) {
-        const conversationKey = this._getConversationKey();
-        encrypted = nip44.v2.encrypt(JSON.stringify(payload), conversationKey);
-      } else {
-        throw new Error('No encryption method available');
-      }
+      // Encrypt payload using signer's nip44 (same as CVM does)
+      const encrypted = await this.signer.nip44.encrypt(
+        this.userPubkeyHex,
+        JSON.stringify(payload)
+      );
 
       // Create unsigned event
       const unsignedEvent = {
@@ -321,43 +274,26 @@ class SyncNotifier {
         created_at: Math.floor(now / 1000),
         tags: [
           ['p', this.userPubkeyHex],
-          ['d', this.appNpub], // d-tag for replaceable event
+          ['d', this.appNpub],
         ],
         content: encrypted,
       };
 
-      // Sign event
-      let signedEvent;
-      if (this.useExtension && window.nostr?.signEvent) {
-        signedEvent = await window.nostr.signEvent(unsignedEvent);
-      } else if (this.privateKeyHex) {
-        const privKeyBytes = hexToBytes(this.privateKeyHex);
-        signedEvent = finalizeEvent(unsignedEvent, privKeyBytes);
-      } else {
-        throw new Error('No signing method available');
-      }
+      // Sign event using signer
+      const signedEvent = await this.signer.signEvent(unsignedEvent);
 
-      // Publish to relays
-      const results = await Promise.allSettled(
-        NOTIFICATION_RELAYS.map((relay) =>
-          Promise.race([
-            this.pool.publish([relay], signedEvent),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
-          ])
-        )
-      );
+      // Publish using relay pool
+      await this.relayPool.publish(signedEvent);
+      console.log('SyncNotifier: published notification');
 
-      const successes = results.filter((r) => r.status === 'fulfilled').length;
-      console.log(`SyncNotifier: published to ${successes}/${NOTIFICATION_RELAYS.length} relays`);
-
-      return successes > 0;
+      return true;
     } catch (err) {
       console.error('SyncNotifier: publish failed:', err);
       return false;
     }
   }
 
-  // Subscribe to sync notifications
+  // Subscribe to sync notifications using ApplesauceRelayPool + RxJS
   startSubscription(callback) {
     if (this.subscription) {
       console.log('SyncNotifier: already subscribed');
@@ -369,37 +305,60 @@ class SyncNotifier {
     const nostrFilter = {
       kinds: [SYNC_NOTIFY_KIND],
       '#p': [this.userPubkeyHex],
-      since: Math.floor(Date.now() / 1000) - 300, // Last 5 minutes
+      since: Math.floor(Date.now() / 1000) - 300,
     };
 
-    console.log('SyncNotifier: starting subscription');
+    console.log('SyncNotifier: starting subscription with filter:', nostrFilter);
 
-    this.subscription = subscribeToRelays(this.pool, NOTIFICATION_RELAYS, nostrFilter)
-      .pipe(onlyEvents(), takeUntil(this.stopSignal))
+    // Create RxJS Observable from relay pool subscription
+    const eventObservable = new Observable((subscriber) => {
+      // ApplesauceRelayPool.subscribe returns a subscription handle
+      const subHandle = this.relayPool.subscribe(
+        [nostrFilter],
+        {
+          onevent: (event) => {
+            subscriber.next(event);
+          },
+          oneose: () => {
+            console.log('SyncNotifier: received EOSE');
+          },
+          onclose: (reason) => {
+            console.log('SyncNotifier: subscription closed:', reason);
+          },
+        }
+      );
+
+      // Cleanup on unsubscribe
+      return () => {
+        if (subHandle && typeof subHandle.close === 'function') {
+          subHandle.close();
+        }
+      };
+    });
+
+    // Process events with RxJS
+    this.subscription = eventObservable
+      .pipe(takeUntil(this.stopSignal))
       .subscribe({
         next: async (event) => {
           try {
-            // Decrypt payload
-            let decrypted;
-            if (this.useExtension && window.nostr?.nip44?.decrypt) {
-              decrypted = await window.nostr.nip44.decrypt(event.pubkey, event.content);
-            } else if (this.privateKeyHex) {
-              const conversationKey = this._getConversationKey();
-              decrypted = nip44.v2.decrypt(event.content, conversationKey);
-            } else {
-              console.warn('SyncNotifier: cannot decrypt event');
-              return;
-            }
+            // Decrypt payload using signer's nip44
+            const decrypted = await this.signer.nip44.decrypt(
+              event.pubkey,
+              event.content
+            );
 
             const payload = JSON.parse(decrypted);
 
             // Skip our own notifications
             if (payload.deviceId === this.deviceId) {
+              console.log('SyncNotifier: skipping own notification');
               return;
             }
 
             // Skip if different app
             if (payload.appNpub !== this.appNpub) {
+              console.log('SyncNotifier: skipping different app notification');
               return;
             }
 
@@ -433,7 +392,7 @@ class SyncNotifier {
   // Cleanup
   destroy() {
     this.stopSubscription();
-    this.pool.close(NOTIFICATION_RELAYS);
+    // Note: ApplesauceRelayPool may not need explicit close
   }
 }
 
