@@ -14,6 +14,13 @@ db.version(2).stores({
   profiles: 'pubkey', // Profile cache by pubkey
 });
 
+db.version(3).stores({
+  credentials: 'id',
+  deviceKey: 'id',
+  profiles: 'pubkey',
+  superbasedTokens: 'id', // Encrypted SuperBased tokens
+});
+
 const DEVICE_KEY_ID = 'device-key';
 const CRED_ID = 'primary';
 const AUTH_EXPIRY_DAYS = 7;
@@ -252,4 +259,54 @@ export async function getCachedProfile(pubkey) {
  */
 export async function clearCachedProfile(pubkey) {
   await db.profiles.delete(pubkey);
+}
+
+// ===========================================
+// SuperBased Token Storage
+// ===========================================
+
+const SUPERBASED_TOKEN_ID = 'primary';
+
+/**
+ * Store SuperBased token securely
+ * @param {string} token - The SuperBased token (base64)
+ */
+export async function storeSuperbaedToken(token) {
+  const encryptedToken = await encryptWithDeviceKey(token);
+  await db.superbasedTokens.put({
+    id: SUPERBASED_TOKEN_ID,
+    encryptedToken,
+    storedAt: Date.now(),
+  });
+}
+
+/**
+ * Retrieve stored SuperBased token
+ * @returns {string|null} Decrypted token or null if none
+ */
+export async function getStoredSuperbasedToken() {
+  try {
+    const record = await db.superbasedTokens.get(SUPERBASED_TOKEN_ID);
+    if (!record?.encryptedToken) return null;
+
+    return await decryptWithDeviceKey(record.encryptedToken);
+  } catch (err) {
+    console.error('Failed to decrypt SuperBased token:', err);
+    return null;
+  }
+}
+
+/**
+ * Clear stored SuperBased token
+ */
+export async function clearSuperbasedToken() {
+  await db.superbasedTokens.delete(SUPERBASED_TOKEN_ID);
+}
+
+/**
+ * Check if SuperBased token exists
+ */
+export async function hasSuperbasedToken() {
+  const record = await db.superbasedTokens.get(SUPERBASED_TOKEN_ID);
+  return !!record?.encryptedToken;
 }

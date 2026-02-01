@@ -57,6 +57,7 @@
             x-show="$store.app.session?.method === 'ephemeral'"
             @click="$store.app.showLoginQr()"
           >Show Login QR</button>
+          <button type="button" @click="$store.app.openSuperBasedModal()">Sync: SuperBased</button>
           <button type="button" @click="$store.app.logout()">Log out</button>
         </div>
       </div>
@@ -366,8 +367,121 @@
         </form>
       </div>
     </div>
+
+    <!-- SuperBased Sync Modal -->
+    <div
+      class="modal-overlay"
+      x-show="$store.app.showSuperBasedModal"
+      @click.self="$store.app.closeSuperBasedModal()"
+      @keydown.escape.window="$store.app.closeSuperBasedModal()"
+    >
+      <div class="modal superbased-modal">
+        <button class="modal-close" type="button" @click="$store.app.closeSuperBasedModal()">&times;</button>
+        <h2>SuperBased Cloud Sync</h2>
+
+        <!-- Token Input (when no config parsed) -->
+        <div x-show="!$store.app.superbasedConfig">
+          <p>Paste your SuperBased connection token to sync your todos to the cloud.</p>
+          <form class="auth-form" @submit.prevent="$store.app.parseSuperbaedToken()">
+            <label>
+              Connection Token
+              <textarea
+                x-model="$store.app.superbasedTokenInput"
+                placeholder="Paste your base64 token here..."
+                rows="3"
+                autocomplete="off"
+              ></textarea>
+            </label>
+            <button class="auth-option" type="submit">Connect</button>
+          </form>
+        </div>
+
+        <!-- Token Parsed - Show Config -->
+        <div x-show="$store.app.superbasedConfig && !$store.app.superbasedSyncStatus">
+          <div class="superbased-config">
+            <div class="config-row">
+              <span class="config-label">Server:</span>
+              <code x-text="$store.app.truncateNpub($store.app.superbasedConfig?.serverNpub)"></code>
+            </div>
+            <div class="config-row">
+              <span class="config-label">Workspace:</span>
+              <code x-text="$store.app.truncateNpub($store.app.superbasedConfig?.workspaceNpub)"></code>
+            </div>
+            <div class="config-row">
+              <span class="config-label">App:</span>
+              <code x-text="$store.app.truncateNpub($store.app.superbasedConfig?.appNpub)"></code>
+            </div>
+            <div class="config-row">
+              <span class="config-label">Relay:</span>
+              <code x-text="$store.app.superbasedConfig?.relayUrl"></code>
+            </div>
+          </div>
+
+          <div class="superbased-actions">
+            <button class="auth-option" type="button" @click="$store.app.syncToSuperbased()">
+              Upload to Cloud
+            </button>
+            <button class="auth-option secondary" type="button" @click="$store.app.downloadFromSuperbased()">
+              Download from Cloud
+            </button>
+          </div>
+
+          <button
+            class="superbased-clear-token"
+            type="button"
+            @click="$store.app.clearSuperbasedToken()"
+          >Clear saved token</button>
+        </div>
+
+        <!-- Sync Status -->
+        <div x-show="$store.app.superbasedSyncStatus && $store.app.superbasedSyncStatus !== 'conflicts'" class="superbased-status">
+          <div class="status-indicator" :class="$store.app.superbasedSyncStatus">
+            <span x-show="$store.app.superbasedSyncStatus === 'connecting'">Connecting...</span>
+            <span x-show="$store.app.superbasedSyncStatus === 'uploading'">Uploading todos...</span>
+            <span x-show="$store.app.superbasedSyncStatus === 'downloading'">Downloading todos...</span>
+            <span x-show="$store.app.superbasedSyncStatus === 'merging'">Merging data...</span>
+            <span x-show="$store.app.superbasedSyncStatus === 'done'">Sync complete!</span>
+            <span x-show="$store.app.superbasedSyncStatus === 'error'">Sync failed</span>
+          </div>
+          <button
+            x-show="$store.app.superbasedSyncStatus === 'done' || $store.app.superbasedSyncStatus === 'error'"
+            class="auth-option"
+            type="button"
+            @click="$store.app.superbasedSyncStatus = null"
+          >OK</button>
+        </div>
+
+        <!-- Conflict Resolution -->
+        <div x-show="$store.app.superbasedSyncStatus === 'conflicts'" class="superbased-conflicts">
+          <h3>Conflicts Found</h3>
+          <p>Some records have different versions locally and remotely.</p>
+
+          <div class="conflict-actions-bulk">
+            <button type="button" @click="$store.app.resolveAllConflicts('keep_all_local')">Keep All Local</button>
+            <button type="button" @click="$store.app.resolveAllConflicts('use_all_remote')">Use All Remote</button>
+          </div>
+
+          <ul class="conflict-list">
+            <template x-for="(conflict, idx) in $store.app.superbasedConflicts" :key="idx">
+              <li class="conflict-item">
+                <span class="conflict-id">Record #<span x-text="conflict.local.id"></span></span>
+                <div class="conflict-buttons">
+                  <button type="button" @click="$store.app.resolveConflict(conflict, 'keep_local')">Keep Local</button>
+                  <button type="button" @click="$store.app.resolveConflict(conflict, 'use_remote')">Use Remote</button>
+                </div>
+              </li>
+            </template>
+          </ul>
+        </div>
+
+        <!-- Error Display -->
+        <p class="auth-error" x-show="$store.app.superbasedError" x-text="$store.app.superbasedError"></p>
+      </div>
+    </div>
   </main>
 
+  <!-- SuperBased SDK (bundled npm packages) -->
+  <script type="module" src="/src/superbased-bundle.js"></script>
   <script type="module" src="/js/app.js"></script>
 
   <!-- Service Worker Registration -->

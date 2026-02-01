@@ -1,4 +1,4 @@
-const CACHE_NAME = 'super-based-todo-v6';
+const CACHE_NAME = 'super-based-todo-v38';
 
 const ASSETS_TO_CACHE = [
   '/',
@@ -9,6 +9,9 @@ const ASSETS_TO_CACHE = [
   '/js/nostr-cvm.js',
   '/js/utils.js',
   '/js/secure-store.js',
+  '/js/superbased.js',
+  '/js/superbased-sdk.js',
+  '/js/keyteleport.js',
   '/css/app.css',
   '/icon-192.png',
   '/icon-512.png',
