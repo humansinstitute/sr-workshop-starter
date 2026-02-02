@@ -249,10 +249,11 @@ export function syncRecordsToTodos(records) {
  * Perform full sync
  * 1. Push local changes to server
  * 2. Pull remote changes
- * 3. Merge into local DB
+ * 3. Merge into local DB (batched for performance)
  */
 export async function performSync(client, ownerNpub, lastSyncTime = null) {
   console.log('SuperBased: Starting sync for', ownerNpub);
+  const startTime = Date.now();
 
   // 1. Get local todos and push to server
   const localRecords = await todosToSyncRecords(ownerNpub);
@@ -272,52 +273,32 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
   const remoteData = await client.fetchRecords(fetchOptions);
   console.log('SuperBased: Fetched', remoteData.records?.length || 0, 'remote records');
 
-  // 3. Merge remote records into local DB
+  // 3. Merge remote records into local DB (BATCHED)
   if (remoteData.records && remoteData.records.length > 0) {
-    const remoteTodos = syncRecordsToTodos(remoteData.records);
+    const todosToUpsert = [];
 
-    // For each remote todo, check if we need to update local
-    for (const remoteTodo of remoteTodos) {
-      if (!remoteTodo.id) {
-        // New record from another device - need to create locally
-        // Extract the numeric ID from record_id (todo_123 -> 123)
-        const match = remoteTodo._remote_id.match(/^todo_(\d+)$/);
-        if (match) {
-          const remoteLocalId = parseInt(match[1], 10);
-
-          // Check if this ID exists locally
-          const existing = await db.todos.get(remoteLocalId);
-
-          if (!existing) {
-            // Import this record with its original ID
-            await db.todos.put({
-              id: remoteLocalId,
-              owner: remoteTodo.owner || ownerNpub,
-              payload: remoteTodo.payload,
-            });
-            console.log('SuperBased: Imported remote todo', remoteLocalId);
-          } else {
-            // ID conflict - compare timestamps if available
-            // For now, just update with remote data
-            await db.todos.put({
-              id: remoteLocalId,
-              owner: remoteTodo.owner || ownerNpub,
-              payload: remoteTodo.payload,
-            });
-            console.log('SuperBased: Updated local todo', remoteLocalId, 'with remote data');
-          }
-        }
-      } else {
-        // Has local ID, update it
-        await db.todos.put({
-          id: remoteTodo.id,
-          owner: remoteTodo.owner || ownerNpub,
-          payload: remoteTodo.payload,
+    for (const record of remoteData.records) {
+      // Extract local ID from record_id (todo_123 -> 123)
+      const match = record.record_id.match(/^todo_(\d+)$/);
+      if (match) {
+        const localId = parseInt(match[1], 10);
+        todosToUpsert.push({
+          id: localId,
+          owner: record.metadata?.owner || ownerNpub,
+          payload: record.encrypted_data,
         });
-        console.log('SuperBased: Merged remote changes for todo', remoteTodo.id);
       }
     }
+
+    // Batch upsert - much faster than individual puts
+    if (todosToUpsert.length > 0) {
+      await db.todos.bulkPut(todosToUpsert);
+      console.log('SuperBased: Batch imported', todosToUpsert.length, 'todos');
+    }
   }
+
+  const elapsed = Date.now() - startTime;
+  console.log('SuperBased: Sync complete in', elapsed, 'ms');
 
   return {
     pushed: localRecords.length,

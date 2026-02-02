@@ -4,12 +4,11 @@
 import { loadNostrLibs, getMemorySecret, getMemoryPubkey } from './nostr.js';
 
 const SYNC_NOTIFY_KIND = 30080;
+// Use just one fast relay for notifications
 const NOTIFICATION_RELAYS = [
   'wss://relay.damus.io',
-  'wss://nos.lol',
-  'wss://relay.primal.net',
 ];
-const DEBOUNCE_MS = 3000; // 3 second debounce
+const DEBOUNCE_MS = 2000; // 2 second debounce
 
 const DEVICE_ID_KEY = 'superbased_device_id';
 
