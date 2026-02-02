@@ -259,13 +259,8 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
     await client.syncRecords(localRecords);
   }
 
-  // 2. Fetch remote records
-  const fetchOptions = {};
-  if (lastSyncTime) {
-    fetchOptions.since = lastSyncTime;
-  }
-
-  const remoteData = await client.fetchRecords(fetchOptions);
+  // 2. Fetch ALL remote records (since filter doesn't work reliably)
+  const remoteData = await client.fetchRecords({});
 
   // 3. Merge remote records into local DB (BATCHED)
   if (remoteData.records && remoteData.records.length > 0) {

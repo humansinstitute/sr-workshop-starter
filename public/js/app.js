@@ -648,11 +648,9 @@ Alpine.store('app', {
     this.isSyncing = true;
 
     try {
-      const lastSync = localStorage.getItem('superbased_last_sync');
-      const result = await performSync(this.superbasedClient, this.session.npub, lastSync);
+      const result = await performSync(this.superbasedClient, this.session.npub);
 
-      // Save last sync time
-      localStorage.setItem('superbased_last_sync', result.syncTime);
+      // Update last sync time for display
       this.lastSyncTime = new Date().toLocaleString();
 
       // Only reload UI if we pulled new records (avoids unnecessary redraws)
@@ -683,12 +681,6 @@ Alpine.store('app', {
           await this.initSuperBasedClient(token);
           this.superbasedConnected = true;
           this.superbasedTokenInput = token;
-
-          // Restore last sync time
-          const lastSync = localStorage.getItem('superbased_last_sync');
-          if (lastSync) {
-            this.lastSyncTime = new Date(lastSync).toLocaleString();
-          }
 
           // Start auto-sync
           this.startAutoSync();
@@ -730,6 +722,11 @@ Alpine.data('todoItem', (todo) => ({
       const details = this.$el.querySelector('details');
       if (details) details.open = false;
       await store.loadTodos();
+
+      // Trigger sync after save
+      if (store.superbasedClient && !store.isSyncing) {
+        store.syncNow();
+      }
     } catch (err) {
       console.error('Failed to save todo:', err);
       alert('Failed to save: ' + err.message);
