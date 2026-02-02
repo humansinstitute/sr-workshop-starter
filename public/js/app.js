@@ -84,6 +84,7 @@ Alpine.store('app', {
   lastSyncTime: null,
   superbasedClient: null,
   syncNotifier: null,
+  syncPollInterval: null,
 
   // New todo input
   newTodoTitle: '',
@@ -551,6 +552,9 @@ Alpine.store('app', {
       this.superbasedClient = client;
       this.superbasedConnected = true;
 
+      // Start auto-sync (polling + visibility)
+      this.startAutoSync();
+
       // Close modal immediately, sync in background
       this.showSuperBasedModal = false;
 
@@ -607,7 +611,65 @@ Alpine.store('app', {
     }
   },
 
+  // Start auto-sync polling and visibility listener
+  startAutoSync() {
+    // Poll every 5 seconds (2s is too aggressive)
+    if (!this.syncPollInterval) {
+      this.syncPollInterval = setInterval(() => {
+        if (this.superbasedClient && !this.isSyncing && document.visibilityState === 'visible') {
+          console.log('SuperBased: Poll sync');
+          this.syncNow(true).catch(err => console.error('Poll sync failed:', err));
+        }
+      }, 5000);
+      console.log('SuperBased: Started poll sync (5s)');
+    }
+
+    // Sync on visibility change (tab becomes visible)
+    if (!this._visibilityHandler) {
+      this._visibilityHandler = () => {
+        if (document.visibilityState === 'visible' && this.superbasedClient && !this.isSyncing) {
+          console.log('SuperBased: Visibility sync');
+          this.syncNow(true).catch(err => console.error('Visibility sync failed:', err));
+        }
+      };
+      document.addEventListener('visibilitychange', this._visibilityHandler);
+      console.log('SuperBased: Added visibility listener');
+    }
+
+    // Sync on window focus
+    if (!this._focusHandler) {
+      this._focusHandler = () => {
+        if (this.superbasedClient && !this.isSyncing) {
+          console.log('SuperBased: Focus sync');
+          this.syncNow(true).catch(err => console.error('Focus sync failed:', err));
+        }
+      };
+      window.addEventListener('focus', this._focusHandler);
+      console.log('SuperBased: Added focus listener');
+    }
+  },
+
+  // Stop auto-sync
+  stopAutoSync() {
+    if (this.syncPollInterval) {
+      clearInterval(this.syncPollInterval);
+      this.syncPollInterval = null;
+    }
+    if (this._visibilityHandler) {
+      document.removeEventListener('visibilitychange', this._visibilityHandler);
+      this._visibilityHandler = null;
+    }
+    if (this._focusHandler) {
+      window.removeEventListener('focus', this._focusHandler);
+      this._focusHandler = null;
+    }
+    console.log('SuperBased: Stopped auto-sync');
+  },
+
   async disconnectSuperBased() {
+    // Stop auto-sync
+    this.stopAutoSync();
+
     // Clean up SyncNotifier
     if (this.syncNotifier) {
       this.syncNotifier.destroy();
@@ -669,6 +731,12 @@ Alpine.store('app', {
           if (lastSync) {
             this.lastSyncTime = new Date(lastSync).toLocaleString();
           }
+
+          // Start auto-sync
+          this.startAutoSync();
+
+          // Initial sync on restore
+          this.syncNow(true).catch(err => console.error('Restore sync failed:', err));
         }
       } catch (err) {
         console.error('Failed to restore SuperBased connection:', err);
