@@ -147,11 +147,6 @@ Alpine.store('app', {
 
   // Actions
   async init() {
-    // Debug: check raw IndexedDB contents at startup
-    const { db } = await import('./db.js');
-    const allTodos = await db.todos.toArray();
-    console.log('INIT: IndexedDB contains', allTodos.length, 'raw todos:', allTodos);
-
     // Check for Key Teleport first (highest priority)
     const teleportBlob = checkForTeleportInUrl();
     if (teleportBlob) {
@@ -266,10 +261,7 @@ Alpine.store('app', {
 
   async loadTodos() {
     if (!this.session?.npub) return;
-
-    console.log('loadTodos: Querying for owner:', this.session.npub);
     this.todos = await getTodosByOwner(this.session.npub);
-    console.log('loadTodos: Found', this.todos.length, 'todos');
 
     // Check SuperBased connection after todos are loaded
     if (!this.superbasedClient) {
@@ -611,41 +603,14 @@ Alpine.store('app', {
     }
   },
 
-  // Start auto-sync polling and visibility listener
+  // Start auto-sync polling (always runs in background)
   startAutoSync() {
-    // Poll every 5 seconds (2s is too aggressive)
     if (!this.syncPollInterval) {
       this.syncPollInterval = setInterval(() => {
-        if (this.superbasedClient && !this.isSyncing && document.visibilityState === 'visible') {
-          console.log('SuperBased: Poll sync');
-          this.syncNow(true).catch(err => console.error('Poll sync failed:', err));
+        if (this.superbasedClient && !this.isSyncing) {
+          this.syncNow(true).catch(() => {});
         }
       }, 5000);
-      console.log('SuperBased: Started poll sync (5s)');
-    }
-
-    // Sync on visibility change (tab becomes visible)
-    if (!this._visibilityHandler) {
-      this._visibilityHandler = () => {
-        if (document.visibilityState === 'visible' && this.superbasedClient && !this.isSyncing) {
-          console.log('SuperBased: Visibility sync');
-          this.syncNow(true).catch(err => console.error('Visibility sync failed:', err));
-        }
-      };
-      document.addEventListener('visibilitychange', this._visibilityHandler);
-      console.log('SuperBased: Added visibility listener');
-    }
-
-    // Sync on window focus
-    if (!this._focusHandler) {
-      this._focusHandler = () => {
-        if (this.superbasedClient && !this.isSyncing) {
-          console.log('SuperBased: Focus sync');
-          this.syncNow(true).catch(err => console.error('Focus sync failed:', err));
-        }
-      };
-      window.addEventListener('focus', this._focusHandler);
-      console.log('SuperBased: Added focus listener');
     }
   },
 
@@ -655,15 +620,6 @@ Alpine.store('app', {
       clearInterval(this.syncPollInterval);
       this.syncPollInterval = null;
     }
-    if (this._visibilityHandler) {
-      document.removeEventListener('visibilitychange', this._visibilityHandler);
-      this._visibilityHandler = null;
-    }
-    if (this._focusHandler) {
-      window.removeEventListener('focus', this._focusHandler);
-      this._focusHandler = null;
-    }
-    console.log('SuperBased: Stopped auto-sync');
   },
 
   async disconnectSuperBased() {
@@ -687,9 +643,9 @@ Alpine.store('app', {
 
   async syncNow(skipNotify = false) {
     if (!this.superbasedClient || !this.session?.npub) return;
+    if (this.isSyncing) return; // Prevent concurrent syncs
 
     this.isSyncing = true;
-    this.superbasedError = null;
 
     try {
       const lastSync = localStorage.getItem('superbased_last_sync');
@@ -699,18 +655,20 @@ Alpine.store('app', {
       localStorage.setItem('superbased_last_sync', result.syncTime);
       this.lastSyncTime = new Date().toLocaleString();
 
-      console.log('SuperBased: Sync complete', result);
+      // Only reload UI if we pulled new records (avoids unnecessary redraws)
+      if (result.pulled > 0) {
+        this.todos = await getTodosByOwner(this.session.npub);
+      }
 
-      // Reload todos to show any new items from sync
-      await this.loadTodos();
-
-      // Notify other devices (unless this sync was triggered by a notification)
+      // Notify other devices if we pushed changes
       if (!skipNotify && this.syncNotifier && result.pushed > 0) {
         await this.syncNotifier.publish();
       }
     } catch (err) {
-      console.error('Sync failed:', err);
-      this.superbasedError = err.message;
+      // Silent fail for background polling
+      if (!skipNotify) {
+        this.superbasedError = err.message;
+      }
     } finally {
       this.isSyncing = false;
     }
