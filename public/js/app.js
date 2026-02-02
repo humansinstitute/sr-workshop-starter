@@ -40,6 +40,7 @@ import {
   parseToken,
   performSync,
 } from './superbased.js';
+import { SyncNotifier } from './sync-notifier.js';
 
 // Make Alpine available globally for debugging
 window.Alpine = Alpine;
@@ -82,6 +83,7 @@ Alpine.store('app', {
   isSyncing: false,
   lastSyncTime: null,
   superbasedClient: null,
+  syncNotifier: null,
 
   // New todo input
   newTodoTitle: '',
@@ -560,6 +562,22 @@ Alpine.store('app', {
       await client.whoami();
       this.superbasedClient = client;
       console.log('SuperBased: Client initialized');
+
+      // Initialize SyncNotifier for real-time updates
+      const config = parseToken(token);
+      if (config.appNpub) {
+        this.syncNotifier = new SyncNotifier(config.appNpub);
+        await this.syncNotifier.init();
+
+        // Subscribe to notifications from other devices
+        this.syncNotifier.startSubscription(async (payload) => {
+          console.log('SuperBased: Received sync notification, fetching updates...');
+          // Pass skipNotify=true to avoid notification loop
+          await this.syncNow(true);
+        });
+
+        console.log('SuperBased: SyncNotifier ready');
+      }
     } catch (err) {
       console.error('SuperBased: Failed to initialize client:', err);
       this.superbasedClient = null;
@@ -569,6 +587,12 @@ Alpine.store('app', {
   },
 
   async disconnectSuperBased() {
+    // Clean up SyncNotifier
+    if (this.syncNotifier) {
+      this.syncNotifier.destroy();
+      this.syncNotifier = null;
+    }
+
     localStorage.removeItem('superbased_token');
     localStorage.removeItem('superbased_last_sync');
     this.superbasedConnected = false;
@@ -578,7 +602,7 @@ Alpine.store('app', {
     this.showSuperBasedModal = false;
   },
 
-  async syncNow() {
+  async syncNow(skipNotify = false) {
     if (!this.superbasedClient || !this.session?.npub) return;
 
     this.isSyncing = true;
@@ -596,6 +620,11 @@ Alpine.store('app', {
 
       // Reload todos to show any new items from sync
       await this.loadTodos();
+
+      // Notify other devices (unless this sync was triggered by a notification)
+      if (!skipNotify && this.syncNotifier && result.pushed > 0) {
+        await this.syncNotifier.publish();
+      }
     } catch (err) {
       console.error('Sync failed:', err);
       this.superbasedError = err.message;
