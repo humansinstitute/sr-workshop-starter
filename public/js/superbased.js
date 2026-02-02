@@ -262,29 +262,34 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
   // 2. Fetch ALL remote records (since filter doesn't work reliably)
   const remoteData = await client.fetchRecords({});
 
-  // 3. Merge remote records into local DB (BATCHED)
+  // 3. Merge remote records into local DB
+  // ONLY add records that don't exist locally (never overwrite local changes)
+  let newRecordsAdded = 0;
   if (remoteData.records && remoteData.records.length > 0) {
-    const todosToUpsert = [];
-
     for (const record of remoteData.records) {
       const match = record.record_id.match(/^todo_(\d+)$/);
       if (match) {
-        todosToUpsert.push({
-          id: parseInt(match[1], 10),
-          owner: record.metadata?.owner || ownerNpub,
-          payload: record.encrypted_data,
-        });
-      }
-    }
+        const localId = parseInt(match[1], 10);
 
-    if (todosToUpsert.length > 0) {
-      await db.todos.bulkPut(todosToUpsert);
+        // Check if this record exists locally
+        const existing = await db.todos.get(localId);
+
+        // Only add if it doesn't exist locally (don't overwrite local changes)
+        if (!existing) {
+          await db.todos.put({
+            id: localId,
+            owner: record.metadata?.owner || ownerNpub,
+            payload: record.encrypted_data,
+          });
+          newRecordsAdded++;
+        }
+      }
     }
   }
 
   return {
     pushed: localRecords.length,
-    pulled: remoteData.records?.length || 0,
+    pulled: newRecordsAdded,
     syncTime: new Date().toISOString(),
   };
 }
