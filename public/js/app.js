@@ -35,6 +35,11 @@ import {
   decodeTeleportBlob,
   decryptWithUnlockCode,
 } from './keyteleport.js';
+import {
+  SuperBasedClient,
+  parseToken,
+  performSync,
+} from './superbased.js';
 
 // Make Alpine available globally for debugging
 window.Alpine = Alpine;
@@ -254,6 +259,11 @@ Alpine.store('app', {
   async loadTodos() {
     if (!this.session?.npub) return;
     this.todos = await getTodosByOwner(this.session.npub);
+
+    // Check SuperBased connection after todos are loaded
+    if (!this.superbasedClient) {
+      await this.checkSuperBasedConnection();
+    }
   },
 
   async addTodo() {
@@ -266,6 +276,11 @@ Alpine.store('app', {
 
     this.newTodoTitle = '';
     await this.loadTodos();
+
+    // Auto-sync if connected
+    if (this.superbasedClient && !this.isSyncing) {
+      this.syncNow();
+    }
   },
 
   async updateTodoField(id, field, value) {
@@ -276,11 +291,21 @@ Alpine.store('app', {
   async transitionState(id, newState) {
     await transitionTodoState(id, newState);
     await this.loadTodos();
+
+    // Auto-sync if connected
+    if (this.superbasedClient && !this.isSyncing) {
+      this.syncNow();
+    }
   },
 
   async deleteTodoItem(id) {
     await deleteTodo(id);
     await this.loadTodos();
+
+    // Auto-sync if connected
+    if (this.superbasedClient && !this.isSyncing) {
+      this.syncNow();
+    }
   },
 
   toggleTag(tag) {
@@ -501,17 +526,23 @@ Alpine.store('app', {
 
     try {
       // Validate token by parsing it
-      const config = this.parseToken(token);
+      const config = parseToken(token);
       if (!config.isValid) {
-        throw new Error('Invalid token - signature verification failed');
+        throw new Error('Invalid token - missing attestation');
       }
+
+      // Try to create client and test connection
+      const client = new SuperBasedClient(token);
+      const whoami = await client.whoami();
+      console.log('SuperBased: Connected as', whoami.npub);
 
       // Save token
       localStorage.setItem('superbased_token', token);
+      this.superbasedClient = client;
       this.superbasedConnected = true;
 
-      // Initialize client (will be implemented with superbased-bundle.js)
-      await this.initSuperBasedClient(token);
+      // Do initial sync
+      await this.syncNow();
 
       this.showSuperBasedModal = false;
     } catch (err) {
@@ -522,40 +553,24 @@ Alpine.store('app', {
     }
   },
 
-  parseToken(tokenBase64) {
-    try {
-      const eventJson = atob(tokenBase64);
-      const event = JSON.parse(eventJson);
-
-      // Extract attestation and basic validation
-      const attestationTag = event.tags.find(t => t[0] === 'attestation');
-
-      return {
-        rawEvent: event,
-        isValid: !!attestationTag, // Full validation requires nostr-tools
-        serverPubkeyHex: event.pubkey,
-        serverNpub: event.tags.find(t => t[0] === 'server')?.[1],
-        appNpub: event.tags.find(t => t[0] === 'app')?.[1],
-        relayUrl: event.tags.find(t => t[0] === 'relay')?.[1],
-        httpUrl: event.tags.find(t => t[0] === 'http')?.[1],
-      };
-    } catch (err) {
-      console.error('Token parse error:', err);
-      return { isValid: false };
-    }
-  },
-
   async initSuperBasedClient(token) {
-    // TODO: Initialize SuperBased client from superbased-bundle.js
-    // For now, just mark as connected
-    const config = this.parseToken(token);
-    console.log('SuperBased client config:', config);
-    this.superbasedClient = { config };
-    this.lastSyncTime = new Date().toLocaleString();
+    try {
+      const client = new SuperBasedClient(token);
+      // Test connection
+      await client.whoami();
+      this.superbasedClient = client;
+      console.log('SuperBased: Client initialized');
+    } catch (err) {
+      console.error('SuperBased: Failed to initialize client:', err);
+      this.superbasedClient = null;
+      this.superbasedConnected = false;
+      throw err;
+    }
   },
 
   async disconnectSuperBased() {
     localStorage.removeItem('superbased_token');
+    localStorage.removeItem('superbased_last_sync');
     this.superbasedConnected = false;
     this.superbasedClient = null;
     this.superbasedTokenInput = '';
@@ -564,14 +579,23 @@ Alpine.store('app', {
   },
 
   async syncNow() {
-    if (!this.superbasedClient) return;
+    if (!this.superbasedClient || !this.session?.npub) return;
 
     this.isSyncing = true;
+    this.superbasedError = null;
+
     try {
-      // TODO: Implement actual sync with SuperBased
-      // For now, just simulate
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const lastSync = localStorage.getItem('superbased_last_sync');
+      const result = await performSync(this.superbasedClient, this.session.npub, lastSync);
+
+      // Save last sync time
+      localStorage.setItem('superbased_last_sync', result.syncTime);
       this.lastSyncTime = new Date().toLocaleString();
+
+      console.log('SuperBased: Sync complete', result);
+
+      // Reload todos to show any new items from sync
+      await this.loadTodos();
     } catch (err) {
       console.error('Sync failed:', err);
       this.superbasedError = err.message;
@@ -582,15 +606,24 @@ Alpine.store('app', {
 
   async checkSuperBasedConnection() {
     const token = localStorage.getItem('superbased_token');
-    if (token) {
+    if (token && this.session?.npub) {
       try {
-        const config = this.parseToken(token);
+        const config = parseToken(token);
         if (config.isValid) {
-          this.superbasedConnected = true;
           await this.initSuperBasedClient(token);
+          this.superbasedConnected = true;
+          this.superbasedTokenInput = token;
+
+          // Restore last sync time
+          const lastSync = localStorage.getItem('superbased_last_sync');
+          if (lastSync) {
+            this.lastSyncTime = new Date(lastSync).toLocaleString();
+          }
         }
       } catch (err) {
         console.error('Failed to restore SuperBased connection:', err);
+        // Token might be invalid or server down - don't remove it, just mark disconnected
+        this.superbasedConnected = false;
       }
     }
   },
