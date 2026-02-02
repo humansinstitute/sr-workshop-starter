@@ -68,6 +68,16 @@ Alpine.store('app', {
   isProcessingTeleport: false,
   pendingTeleport: null, // Stores { encryptedNsec, npub } during unlock
 
+  // SuperBased state
+  showSuperBasedModal: false,
+  superbasedTokenInput: '',
+  superbasedError: null,
+  superbasedConnected: false,
+  isSavingSuperBased: false,
+  isSyncing: false,
+  lastSyncTime: null,
+  superbasedClient: null,
+
   // New todo input
   newTodoTitle: '',
 
@@ -145,6 +155,9 @@ Alpine.store('app', {
 
     // Try auto-login
     await this.maybeAutoLogin();
+
+    // Check for existing SuperBased connection
+    await this.checkSuperBasedConnection();
   },
 
   async maybeAutoLogin() {
@@ -459,6 +472,127 @@ Alpine.store('app', {
     this.pendingTeleport = null;
     this.teleportUnlockCode = '';
     this.teleportError = null;
+  },
+
+  // ===========================================
+  // SuperBased Sync Methods
+  // ===========================================
+
+  openSuperBasedSettings() {
+    this.showAvatarMenu = false;
+    // Load existing token if any
+    const existingToken = localStorage.getItem('superbased_token');
+    if (existingToken) {
+      this.superbasedTokenInput = existingToken;
+    }
+    this.superbasedError = null;
+    this.showSuperBasedModal = true;
+  },
+
+  async saveSuperBasedToken() {
+    const token = this.superbasedTokenInput.trim();
+    if (!token) {
+      this.superbasedError = 'Please paste a token';
+      return;
+    }
+
+    this.isSavingSuperBased = true;
+    this.superbasedError = null;
+
+    try {
+      // Validate token by parsing it
+      const config = this.parseToken(token);
+      if (!config.isValid) {
+        throw new Error('Invalid token - signature verification failed');
+      }
+
+      // Save token
+      localStorage.setItem('superbased_token', token);
+      this.superbasedConnected = true;
+
+      // Initialize client (will be implemented with superbased-bundle.js)
+      await this.initSuperBasedClient(token);
+
+      this.showSuperBasedModal = false;
+    } catch (err) {
+      console.error('SuperBased token error:', err);
+      this.superbasedError = err.message || 'Failed to connect';
+    } finally {
+      this.isSavingSuperBased = false;
+    }
+  },
+
+  parseToken(tokenBase64) {
+    try {
+      const eventJson = atob(tokenBase64);
+      const event = JSON.parse(eventJson);
+
+      // Extract attestation and basic validation
+      const attestationTag = event.tags.find(t => t[0] === 'attestation');
+
+      return {
+        rawEvent: event,
+        isValid: !!attestationTag, // Full validation requires nostr-tools
+        serverPubkeyHex: event.pubkey,
+        serverNpub: event.tags.find(t => t[0] === 'server')?.[1],
+        appNpub: event.tags.find(t => t[0] === 'app')?.[1],
+        relayUrl: event.tags.find(t => t[0] === 'relay')?.[1],
+        httpUrl: event.tags.find(t => t[0] === 'http')?.[1],
+      };
+    } catch (err) {
+      console.error('Token parse error:', err);
+      return { isValid: false };
+    }
+  },
+
+  async initSuperBasedClient(token) {
+    // TODO: Initialize SuperBased client from superbased-bundle.js
+    // For now, just mark as connected
+    const config = this.parseToken(token);
+    console.log('SuperBased client config:', config);
+    this.superbasedClient = { config };
+    this.lastSyncTime = new Date().toLocaleString();
+  },
+
+  async disconnectSuperBased() {
+    localStorage.removeItem('superbased_token');
+    this.superbasedConnected = false;
+    this.superbasedClient = null;
+    this.superbasedTokenInput = '';
+    this.lastSyncTime = null;
+    this.showSuperBasedModal = false;
+  },
+
+  async syncNow() {
+    if (!this.superbasedClient) return;
+
+    this.isSyncing = true;
+    try {
+      // TODO: Implement actual sync with SuperBased
+      // For now, just simulate
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      this.lastSyncTime = new Date().toLocaleString();
+    } catch (err) {
+      console.error('Sync failed:', err);
+      this.superbasedError = err.message;
+    } finally {
+      this.isSyncing = false;
+    }
+  },
+
+  async checkSuperBasedConnection() {
+    const token = localStorage.getItem('superbased_token');
+    if (token) {
+      try {
+        const config = this.parseToken(token);
+        if (config.isValid) {
+          this.superbasedConnected = true;
+          await this.initSuperBasedClient(token);
+        }
+      } catch (err) {
+        console.error('Failed to restore SuperBased connection:', err);
+      }
+    }
   },
 });
 
