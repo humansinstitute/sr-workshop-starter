@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Super Based Todo</title>
+  <meta name="description" content="Local-first todo app with Nostr auth and encrypted storage" />
+  <meta name="theme-color" content="#111111" />
+  <meta name="application-name" content="Super Based Todo" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Based Todo" />
+
+  <link rel="stylesheet" href="/css/app.css" />
+  <script type="module" crossorigin src="/assets/index-B5Qt9EMX.js"></script>
+</head>
+<body x-data x-cloak>
+  <main class="app-shell">
+    <!-- Header -->
+    <header class="page-header">
+      <h1>Super Based Todo</h1>
+      <div class="session-controls" x-show="$store.app.isLoggedIn">
+        <button
+          class="avatar-chip"
+          type="button"
+          @click="$store.app.showAvatarMenu = !$store.app.showAvatarMenu"
+          title="Account menu"
+        >
+          <img
+            x-show="$store.app.avatarUrl"
+            :src="$store.app.avatarUrl"
+            alt="Avatar"
+            @error="$store.app.profile && ($store.app.profile.picture = null)"
+          />
+          <span class="avatar-fallback" x-show="!$store.app.avatarUrl" x-text="$store.app.avatarFallback"></span>
+        </button>
+        <div
+          class="avatar-menu"
+          x-show="$store.app.showAvatarMenu"
+          @click.outside="$store.app.showAvatarMenu = false"
+        >
+          <div class="avatar-menu-header">
+            <span class="avatar-menu-name" x-text="$store.app.displayName"></span>
+          </div>
+          <button type="button" @click="$store.app.copyId()">Copy ID</button>
+          <button
+            type="button"
+            x-show="$store.app.session?.method === 'ephemeral'"
+            @click="$store.app.exportSecret()"
+          >Export Secret</button>
+          <button
+            type="button"
+            x-show="$store.app.session?.method === 'ephemeral'"
+            @click="$store.app.showLoginQr()"
+          >Show Login QR</button>
+          <button type="button" @click="$store.app.openSuperBasedSettings()">SuperBased Sync</button>
+          <button type="button" @click="$store.app.logout()">Log out</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Auth Panel (shown when logged out) -->
+    <section class="auth-panel" x-show="!$store.app.isLoggedIn">
+      <h2>Sign in with Nostr to get started</h2>
+      <p class="auth-description">Start with a quick Ephemeral ID or bring your own signer.</p>
+      <div class="auth-actions">
+        <button
+          class="auth-option"
+          type="button"
+          :disabled="$store.app.isLoggingIn"
+          @click="$store.app.login('ephemeral')"
+        >
+          <span x-show="!$store.app.isLoggingIn">Sign Up</span>
+          <span x-show="$store.app.isLoggingIn">Signing in...</span>
+        </button>
+        <button
+          class="auth-option auth-extension"
+          type="button"
+          :disabled="$store.app.isLoggingIn"
+          @click="$store.app.login('extension')"
+        >Browser Extension</button>
+        <button
+          class="auth-option auth-keyteleport"
+          type="button"
+          @click="$store.app.setupKeyTeleport()"
+        >Key Teleport</button>
+      </div>
+      <details class="auth-advanced">
+        <summary>Advanced options</summary>
+        <p>Connect to a remote bunker or paste your nsec.</p>
+        <form class="auth-form" @submit.prevent="$store.app.login('bunker', $refs.bunkerInput.value)">
+          <input
+            x-ref="bunkerInput"
+            name="bunker"
+            placeholder="nostrconnect://... or name@example.com"
+            autocomplete="off"
+          />
+          <button class="auth-option" type="submit" :disabled="$store.app.isLoggingIn">Connect Bunker</button>
+        </form>
+        <hr class="auth-divider" />
+        <form class="auth-form" @submit.prevent="$store.app.login('secret', $refs.secretInput.value); $refs.secretInput.value = ''">
+          <input
+            x-ref="secretInput"
+            type="password"
+            name="secret"
+            placeholder="nsec1..."
+            autocomplete="off"
+          />
+          <button class="auth-option" type="submit" :disabled="$store.app.isLoggingIn">BYO Nsec</button>
+        </form>
+      </details>
+      <p class="auth-error" x-show="$store.app.loginError" x-text="$store.app.loginError"></p>
+    </section>
+
+    <!-- Hero Input (add todo) -->
+    <section class="hero-entry" x-show="$store.app.isLoggedIn">
+      <form class="todo-form" @submit.prevent="$store.app.addTodo()">
+        <label for="title" class="sr-only">Add a task</label>
+        <div class="hero-input-wrapper">
+          <input
+            class="hero-input"
+            id="title"
+            x-model="$store.app.newTodoTitle"
+            placeholder="Add something else..."
+            autocomplete="off"
+            autofocus
+            required
+          />
+        </div>
+      </form>
+    </section>
+
+    <!-- Hint when logged out -->
+    <p class="hero-hint" x-show="!$store.app.isLoggedIn">Sign in above to add tasks.</p>
+
+    <!-- Work Section -->
+    <section class="work" x-show="$store.app.isLoggedIn">
+      <div class="work-header">
+        <h2>Work</h2>
+        <button
+          class="archive-toggle"
+          @click="$store.app.toggleArchive()"
+          x-text="$store.app.showArchive ? 'Hide archive' : `Archive (${$store.app.doneTodos.length})`"
+        ></button>
+      </div>
+      <p class="remaining-summary" x-text="$store.app.remainingText"></p>
+
+      <!-- Tag Filter Bar -->
+      <div class="tag-filter-bar" x-show="$store.app.allTags.length > 0">
+        <span class="label">Filter by tag:</span>
+        <template x-for="tag in $store.app.allTags" :key="tag">
+          <span
+            class="tag-chip"
+            :class="{ 'active': $store.app.isTagActive(tag) }"
+            @click="$store.app.toggleTag(tag)"
+            x-text="tag"
+          ></span>
+        </template>
+        <button
+          class="clear-filters"
+          x-show="$store.app.filterTags.length > 0"
+          @click="$store.app.clearFilters()"
+        >Clear filters</button>
+      </div>
+
+      <!-- Active Todos List -->
+      <ul class="todo-list">
+        <template x-if="$store.app.activeTodos.length === 0">
+          <li class="empty-state">No active work. Add something new!</li>
+        </template>
+        <template x-for="todo in $store.app.activeTodos" :key="todo.id">
+          <li x-data="todoItem(todo)">
+            <details>
+              <summary>
+                <span class="todo-title" x-text="todo.title"></span>
+                <span class="badges">
+                  <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
+                  <span class="badge" :class="`state-${todo.state}`" x-text="$store.app.formatState(todo.state)"></span>
+                  <template x-for="tag in tagsArray" :key="tag">
+                    <span class="tag-chip" x-text="tag"></span>
+                  </template>
+                </span>
+              </summary>
+              <div class="todo-body">
+                <p class="todo-description" x-show="todo.description" x-text="todo.description"></p>
+                <p class="todo-description" x-show="todo.scheduled_for">
+                  <strong>Scheduled for:</strong> <span x-text="todo.scheduled_for"></span>
+                </p>
+
+                <!-- Edit Form -->
+                <form class="edit-form" @submit.prevent="save()">
+                  <label>
+                    Title
+                    <input x-model="localTodo.title" required />
+                  </label>
+                  <label>
+                    Description
+                    <textarea x-model="localTodo.description" rows="3"></textarea>
+                  </label>
+                  <label>
+                    Priority
+                    <select x-model="localTodo.priority">
+                      <option value="rock">Rock</option>
+                      <option value="pebble">Pebble</option>
+                      <option value="sand">Sand</option>
+                    </select>
+                  </label>
+                  <label>
+                    State
+                    <select x-model="localTodo.state">
+                      <option value="new">New</option>
+                      <option value="ready">Ready</option>
+                      <option value="in_progress">In Progress</option>
+                      <option value="done">Done</option>
+                    </select>
+                  </label>
+                  <label>
+                    Scheduled For
+                    <input type="date" x-model="localTodo.scheduled_for" />
+                  </label>
+                  <label>
+                    Tags
+                    <div class="tag-input-wrapper">
+                      <template x-for="tag in tagsArray" :key="tag">
+                        <span class="tag-chip">
+                          <span x-text="tag"></span>
+                          <span class="remove-tag" @click="removeTag(tag)">&times;</span>
+                        </span>
+                      </template>
+                      <input
+                        type="text"
+                        x-model="tagInput"
+                        @keydown="handleTagKeydown($event)"
+                        @blur="addTag()"
+                        placeholder="Type and press comma..."
+                      />
+                    </div>
+                  </label>
+                  <button type="submit">Update</button>
+                </form>
+
+                <!-- Action Buttons -->
+                <div class="todo-actions">
+                  <template x-for="nextState in $store.app.getTransitions(todo.state)" :key="nextState">
+                    <button
+                      type="button"
+                      @click="$store.app.transitionState(todo.id, nextState)"
+                      x-text="$store.app.formatTransition(todo.state, nextState)"
+                    ></button>
+                  </template>
+                  <button type="button" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
+                </div>
+              </div>
+            </details>
+          </li>
+        </template>
+      </ul>
+
+      <!-- Archive Section -->
+      <section class="archive-section" x-show="$store.app.showArchive">
+        <div class="section-heading"><h2>Archive</h2></div>
+        <ul class="todo-list">
+          <template x-if="$store.app.doneTodos.length === 0">
+            <li class="empty-state">Nothing archived yet.</li>
+          </template>
+          <template x-for="todo in $store.app.doneTodos" :key="todo.id">
+            <li x-data="todoItem(todo)">
+              <details>
+                <summary>
+                  <span class="todo-title" x-text="todo.title"></span>
+                  <span class="badges">
+                    <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
+                    <span class="badge state-done">Done</span>
+                    <template x-for="tag in tagsArray" :key="tag">
+                      <span class="tag-chip" x-text="tag"></span>
+                    </template>
+                  </span>
+                </summary>
+                <div class="todo-body">
+                  <p class="todo-description" x-show="todo.description" x-text="todo.description"></p>
+                  <div class="todo-actions">
+                    <button type="button" @click="$store.app.transitionState(todo.id, 'ready')">Reopen</button>
+                    <button type="button" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
+                  </div>
+                </div>
+              </details>
+            </li>
+          </template>
+        </ul>
+      </section>
+    </section>
+
+    <!-- QR Modal -->
+    <div
+      class="modal-overlay"
+      x-show="$store.app.showQrModal"
+      @click.self="$store.app.showQrModal = false"
+      @keydown.escape.window="$store.app.showQrModal = false"
+    >
+      <div class="modal">
+        <button class="modal-close" type="button" @click="$store.app.showQrModal = false">&times;</button>
+        <h2>Login QR Code</h2>
+        <p>Scan this code with your mobile device to log in</p>
+        <div class="qr-canvas-container" data-qr-container></div>
+      </div>
+    </div>
+
+    <!-- Key Teleport Setup Modal -->
+    <div
+      class="modal-overlay"
+      x-show="$store.app.showTeleportSetupModal"
+      @click.self="$store.app.showTeleportSetupModal = false"
+      @keydown.escape.window="$store.app.showTeleportSetupModal = false"
+    >
+      <div class="modal teleport-modal">
+        <button class="modal-close" type="button" @click="$store.app.showTeleportSetupModal = false">&times;</button>
+        <h2>Key Teleport Setup</h2>
+        <p>Registration blob copied to clipboard!</p>
+        <p class="hint">Paste this into your key manager (e.g., Welcome) to register this app.</p>
+        <div class="teleport-npub">
+          <label>This app's identity:</label>
+          <code x-text="$store.app.instanceNpub"></code>
+        </div>
+        <button
+          class="auth-option"
+          type="button"
+          @click="$store.app.showTeleportSetupModal = false"
+        >Done</button>
+      </div>
+    </div>
+
+    <!-- Key Teleport Unlock Modal -->
+    <div
+      class="modal-overlay"
+      x-show="$store.app.showTeleportUnlockModal"
+      @keydown.escape.window="$store.app.cancelTeleport()"
+    >
+      <div class="modal teleport-modal">
+        <button class="modal-close" type="button" @click="$store.app.cancelTeleport()">&times;</button>
+        <h2>Key Teleport</h2>
+        <p>Importing identity:</p>
+        <code class="teleport-identity" x-text="$store.app.teleportNpub"></code>
+        <form class="auth-form" @submit.prevent="$store.app.completeTeleport()">
+          <label>
+            Paste unlock code from clipboard:
+            <input
+              type="password"
+              x-model="$store.app.teleportUnlockCode"
+              placeholder="nsec1..."
+              autocomplete="off"
+              autofocus
+            />
+          </label>
+          <p class="hint">The code was copied when you clicked "Teleport"</p>
+          <p class="auth-error" x-show="$store.app.teleportError" x-text="$store.app.teleportError"></p>
+          <div class="teleport-actions">
+            <button class="auth-option secondary" type="button" @click="$store.app.cancelTeleport()">Cancel</button>
+            <button class="auth-option" type="submit" :disabled="$store.app.isProcessingTeleport">
+              <span x-show="!$store.app.isProcessingTeleport">Unlock</span>
+              <span x-show="$store.app.isProcessingTeleport">Unlocking...</span>
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- SuperBased Settings Modal -->
+    <div
+      class="modal-overlay"
+      x-show="$store.app.showSuperBasedModal"
+      @click.self="$store.app.showSuperBasedModal = false"
+      @keydown.escape.window="$store.app.showSuperBasedModal = false"
+    >
+      <div class="modal superbased-modal">
+        <button class="modal-close" type="button" @click="$store.app.showSuperBasedModal = false">&times;</button>
+        <h2>SuperBased Sync</h2>
+        <p>Connect to SuperBased to sync your todos across devices.</p>
+
+        <div x-show="$store.app.superbasedConnected" class="superbased-status connected">
+          <span class="status-dot"></span>
+          <span>Connected to SuperBased</span>
+        </div>
+
+        <form class="auth-form" @submit.prevent="$store.app.saveSuperBasedToken()">
+          <label>
+            Paste your SuperBased token:
+            <textarea
+              x-model="$store.app.superbasedTokenInput"
+              rows="4"
+              placeholder="Paste token from 'bun run cli' here..."
+              class="token-input"
+            ></textarea>
+          </label>
+          <p class="auth-error" x-show="$store.app.superbasedError" x-text="$store.app.superbasedError"></p>
+          <div class="superbased-actions">
+            <button
+              class="auth-option secondary"
+              type="button"
+              x-show="$store.app.superbasedConnected"
+              @click="$store.app.disconnectSuperBased()"
+            >Disconnect</button>
+            <button
+              class="auth-option"
+              type="submit"
+              :disabled="$store.app.isSavingSuperBased"
+            >
+              <span x-show="!$store.app.isSavingSuperBased" x-text="$store.app.superbasedConnected ? 'Update Token' : 'Connect'"></span>
+              <span x-show="$store.app.isSavingSuperBased">Connecting...</span>
+            </button>
+          </div>
+        </form>
+
+        <div class="superbased-sync-status" x-show="$store.app.superbasedConnected">
+          <p x-show="$store.app.lastSyncTime">
+            Last synced: <span x-text="$store.app.lastSyncTime"></span>
+          </p>
+          <button
+            class="auth-option secondary"
+            type="button"
+            @click="$store.app.syncNow()"
+            :disabled="$store.app.isSyncing"
+          >
+            <span x-show="!$store.app.isSyncing">Sync Now</span>
+            <span x-show="$store.app.isSyncing">Syncing...</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script type="module" src="/js/app.js"></script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js')
+          .then((reg) => console.log('SW registered:', reg.scope))
+          .catch((err) => console.log('SW registration failed:', err));
+      });
+    }
+  </script>
+</body>
+</html>

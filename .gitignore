@@ -10,8 +10,7 @@ pnpm-lock.yaml
 *.log
 *.sqlite
 
-# build output
-dist/
+# build output (dist/ is committed for deployment)
 build/
 
 # environment files
