@@ -80,6 +80,60 @@ curl -X POST \
 **CRITICAL**:
 - `record_id` must use **underscore**: `todo_abc123` (NOT `todo-abc123`)
 - `metadata.owner` must be the **npub** (NOT hex pubkey) - this is how the app finds your todos!
+- `encrypted_data` must be **properly escaped JSON** - see JSON Escaping section below
+
+---
+
+## JSON Escaping (IMPORTANT!)
+
+The `encrypted_data` field is a **JSON string containing JSON**. You must properly escape:
+
+| Character | Escape as |
+|-----------|-----------|
+| Newline | `\\n` |
+| Tab | `\\t` |
+| Quote | `\\"` |
+| Backslash | `\\\\` |
+
+**Emojis are OK** - they don't need escaping.
+
+### Bad (will fail):
+```json
+"encrypted_data": "{\"title\":\"My Task\",\"description\":\"Line 1
+Line 2\"}"
+```
+The literal newline breaks JSON parsing!
+
+### Good (properly escaped):
+```json
+"encrypted_data": "{\"title\":\"My Task\",\"description\":\"Line 1\\nLine 2\"}"
+```
+
+### Tip: Use JSON.stringify twice
+
+In JavaScript/Node:
+```javascript
+const todoData = {
+  title: "📊 Summary",
+  description: "Line 1\nLine 2\n**Bold**",
+  priority: "sand",
+  // ... other fields
+};
+
+// This handles all escaping automatically
+const encrypted_data = JSON.stringify(JSON.stringify(todoData));
+// Result: "\"{\\\"title\\\":\\\"📊 Summary\\\",\\\"description\\\":\\\"Line 1\\\\nLine 2\\\\n**Bold**\\\",...}\""
+
+// Or just stringify once for the value:
+const encrypted_data = JSON.stringify(todoData);
+// Result: "{\"title\":\"📊 Summary\",\"description\":\"Line 1\\nLine 2\\n**Bold**\",...}"
+```
+
+### Common Mistakes
+
+1. **Literal newlines in description** - Use `\\n` not actual line breaks
+2. **Unescaped quotes** - All `"` inside the JSON must be `\"`
+3. **Copy-pasting formatted text** - May contain hidden control characters
 
 ---
 
