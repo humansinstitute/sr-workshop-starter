@@ -41,7 +41,7 @@ import {
   parseToken,
   performSync,
 } from './superbased.js';
-import { SyncNotifier } from './sync-notifier.js';
+import { SyncNotifier, DelegationNotifier } from './sync-notifier.js';
 import {
   publishSuperBasedToken,
   fetchSuperBasedTokenByApp,
@@ -75,6 +75,7 @@ Alpine.store('app', {
   showQrModal: false,
   showProfileModal: false,
   editingTodoId: null,
+  justSavedTodoId: null,
 
   // Key Teleport state
   showTeleportSetupModal: false,
@@ -96,6 +97,7 @@ Alpine.store('app', {
   lastSyncTime: null,
   superbasedClient: null,
   syncNotifier: null,
+  delegationNotifier: null,
   syncPollInterval: null,
   // Sync status tracking
   hasUnsyncedChanges: false,
@@ -581,6 +583,14 @@ Alpine.store('app', {
     this.showSuperBasedModal = true;
   },
 
+  // Hardcoded OtherStuff Superbased token for quick connect
+  OTHERSTUFF_TOKEN: 'eyJraW5kIjozMDA3OCwiY3JlYXRlZF9hdCI6MTc3MDAwNjQ1OSwidGFncyI6W1siZCIsInN1cGVyYmFzZWQtdG9rZW4iXSxbImFwcCIsIm5wdWIxcHB1YW55azI3OTZrM3YwNDJ3aGhjMzN0YWdtcnR5eWRyY2M3d2UyeWsydDh6aGdqc3Z5czJ0Y2FteCJdLFsic2VydmVyIiwibnB1YjE0Z2s1MHdwd3BldGE4ZmZrNmY0NnhsdDV5NHlwdXNwd3RlMjBlazR0OXltMzl1djh0dGRzNHVuNm11Il0sWyJyZWxheSIsIndzczovL3JlbGF5LmRhbXVzLmlvIl0sWyJhdHRlc3RhdGlvbiIsImV5SnJhVzVrSWpvek1EQTNPU3dpWTNKbFlYUmxaRjloZENJNk1UYzNNREF3TmpNd09Dd2lkR0ZuY3lJNlcxc2laQ0lzSW5OMWNHVnlZbUZ6WldRdGNtVm5hWE4wY21GMGFXOXVJbDBzV3lKelpYSjJaWElpTENKdWNIVmlNVFJuYXpVd2QzQjNjR1YwWVRobVptczJaalEyZUd4ME5YazBlWEIxYzNCM2RHVXlNR1ZyTkhRNWVXMHpPWFYyT0hSMFpITTBkVzQyYlhVaVhTeGJJbTVoYldVaUxDSlViMlJ2SUhjZ1JteDFlQ0pkWFN3aVkyOXVkR1Z1ZENJNklpSXNJbkIxWW10bGVTSTZJakE0Tnpsa09Ua3lZMkZtTVRjMU5qaGlNV1kxTlROaFpqZGpORFl5WW1WaE16WXpOVGt3T0dReFpUTXhaVGMyTlRRMFlqSTVOamN4TldReE1qZ3pNRGtpTENKcFpDSTZJamsyWTJWbVpqWmhPR1ExWlRBek5UazFNemt4TTJZeU9UWXdOemxsTWpVeE5qTTFNVEkwTkRNd1l6QXlNV1V6WW1ZMU5qRmxNVEV5WkRjM1pqUTRNakVpTENKemFXY2lPaUl4TlRaaFlqRXlaV1EyTXpZek1HUXpaV1JtTUdFMU0yRXlaR013TWpGaU1qUXhZemRqWWpVMU5UQmxabVE0TURoa056Y3hOR0V4T0dKa09EY3lZV1JoWkRsa05USXdNMk00TmpVeU9URXhPVEpoT1Roa01qTXlZbU0zWWprMll6RTNOalprT0RsbU16TTFaR1ZpTlROaVpEZGxZMkpqT0RNMlkyVmhaVE16TkNKOSJdLFsiaHR0cCIsImh0dHBzOi8vc2Iub3RoZXJzdHVmZi5zdHVkaW8vIl1dLCJjb250ZW50IjoiIiwicHVia2V5IjoiYWEyZDQ3YjgyZTBlNTdkM2E1MzZkMjZiYTM3ZDc0MjU0ODFlNDAyZTVlNTRmY2RhYWIyOTM3MTJmMTg3NWFkYiIsImlkIjoiYmQ0MjJjNThiZDdhY2E2MmIzMmIyZWIxYTYyNDE1ZGZiYTY2YTY1NGRiZjI1NTM2MTI5NTE1YjkyODY5ZWJlNCIsInNpZyI6IjIyMzMzNjkzYjc0N2VmODhkM2E3OWYzZThkYzc2MzY0ODY3Y2ZhMmIxMTljOTNiNDEyM2E4ZGEyODk0YWRmNjFhYmM1YjdjZGIyZWJkNjM2NjAxZGJlNzVmNThjYzMwMDdhZTJjNWE5ZGY4NzM5MDkwZTRjMTE5MzJhMzQzNDZjIn0=',
+
+  async connectWithOtherStuff() {
+    this.superbasedTokenInput = this.OTHERSTUFF_TOKEN;
+    await this.saveSuperBasedToken();
+  },
+
   async saveSuperBasedToken() {
     const token = this.superbasedTokenInput.trim();
     if (!token) {
@@ -674,6 +684,22 @@ Alpine.store('app', {
       // Don't fail the connection, just disable real-time notifications
       this.syncNotifier = null;
     }
+
+    // Initialize DelegationNotifier for task assignment notifications
+    try {
+      this.delegationNotifier = new DelegationNotifier(appNpub);
+      await this.delegationNotifier.init();
+      console.log('SuperBased: DelegationNotifier ready');
+    } catch (err) {
+      console.error('SuperBased: DelegationNotifier failed (non-fatal):', err);
+      this.delegationNotifier = null;
+    }
+  },
+
+  // Initialize background sync from saved token (called on auto-login)
+  // Alias for checkSuperBasedConnection - kept for compatibility
+  async initBackgroundSync() {
+    return this.checkSuperBasedConnection();
   },
 
   // Start auto-sync polling (always runs in background)
@@ -703,6 +729,12 @@ Alpine.store('app', {
     if (this.syncNotifier) {
       this.syncNotifier.destroy();
       this.syncNotifier = null;
+    }
+
+    // Clean up DelegationNotifier
+    if (this.delegationNotifier) {
+      this.delegationNotifier.destroy();
+      this.delegationNotifier = null;
     }
 
     // Optionally delete from Nostr
@@ -754,6 +786,12 @@ Alpine.store('app', {
       // Notify other devices if we pushed changes
       if (!skipNotify && this.syncNotifier && result.pushed > 0) {
         await this.syncNotifier.publish();
+      }
+
+      // Notify delegates if there are task assignments
+      if (this.delegationNotifier && result.delegateNotifications?.length > 0) {
+        console.log(`Sync: Publishing ${result.delegateNotifications.length} delegation notification(s)`);
+        await this.delegationNotifier.publishAssignments(result.delegateNotifications);
       }
     } catch (err) {
       // Silent fail for background polling, but keep hasUnsyncedChanges true
@@ -947,6 +985,7 @@ Alpine.data('todoItem', (todo) => ({
         this._lastSyncedAt = freshTodo.updated_at;
       }
     });
+
   },
 
   get tagsArray() {
@@ -965,11 +1004,20 @@ Alpine.data('todoItem', (todo) => ({
         tags: this.localTodo.tags,
         assigned_to: this.localTodo.assigned_to || null,
       });
+      const savedId = this.localTodo.id;
       store.stopEditing();
-      // Close the details element
-      const details = this.$el.querySelector('details');
-      if (details) details.open = false;
+
+      // Set BEFORE loadTodos so new component sees it on init
+      store.justSavedTodoId = savedId;
+
       await store.loadTodos();
+
+      // Clear after animation completes
+      setTimeout(() => {
+        if (store.justSavedTodoId === savedId) {
+          store.justSavedTodoId = null;
+        }
+      }, 700);
 
       // Mark as having unsynced changes
       store.hasUnsyncedChanges = true;

@@ -774,6 +774,103 @@ summary::-webkit-details-marker {
   border-color: #fca5a5;
   color: #b91c1c;
 }
+/* Connection Details */
+.superbased-connection-details {
+  background: #f8fffe;
+  border: 1px solid #d1fae5;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.connection-status.connected {
+  color: #166534;
+}
+.connection-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+.info-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.info-label {
+  color: #666;
+  min-width: 70px;
+}
+.info-value {
+  color: #333;
+  word-break: break-all;
+}
+.info-npub {
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+.connection-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.connection-actions .auth-option {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+.auth-option.danger {
+  background: transparent;
+  border: 1px solid #fca5a5;
+  color: #b91c1c;
+}
+.auth-option.danger:hover {
+  background: #fee2e2;
+}
+
+/* Quick Connect */
+.superbased-quick-connect {
+  margin-bottom: 1rem;
+}
+.otherstuff-connect {
+  width: 100%;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  color: white;
+  font-weight: 600;
+  padding: 0.85rem 1rem;
+  border: none;
+}
+.otherstuff-connect:hover {
+  background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+}
+.quick-connect-divider {
+  text-align: center;
+  color: #999;
+  font-size: 0.8rem;
+  margin: 1rem 0 0.5rem;
+  position: relative;
+}
+.quick-connect-divider::before,
+.quick-connect-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 30%;
+  height: 1px;
+  background: #ddd;
+}
+.quick-connect-divider::before {
+  left: 0;
+}
+.quick-connect-divider::after {
+  right: 0;
+}
+
 .superbased-sync-status {
   margin-top: 1.5rem;
   padding-top: 1rem;
@@ -956,4 +1053,13 @@ summary::-webkit-details-marker {
   text-align: center;
   color: #666;
   padding: 1rem;
+}
+
+/* Todo update flash animation */
+@keyframes todo-saved-flash {
+  0% { background-color: #d1fae5; }
+  100% { background-color: var(--surface); }
+}
+li.todo-saved {
+  animation: todo-saved-flash 600ms ease-out;
 }

@@ -1,7 +1,7 @@
 // SuperBased Sync Client
 // Handles authenticated sync with flux_adaptor server
 
-import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes, decryptObject } from './nostr.js';
+import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes, decryptObject, encryptObjectToRecipient } from './nostr.js';
 import { getEncryptedTodosByOwner, importEncryptedTodos, db } from './db.js';
 
 // Device ID for tracking sync origin
@@ -270,7 +270,7 @@ export class SuperBasedClient {
  * Convert local todos to sync format
  * Each todo becomes a record with encrypted_data being the payload
  * Includes updated_at and device_id in metadata for conflict resolution
- * Supports assigned_to for delegation
+ * Supports delegates array for per-record delegation
  */
 export async function todosToSyncRecords(ownerNpub) {
   // Get raw encrypted todos from DB
@@ -282,10 +282,11 @@ export async function todosToSyncRecords(ownerNpub) {
   for (const todo of encryptedTodos) {
     let updatedAt = null;
     let assignedTo = null;
+    let decryptedData = null;
     try {
-      const decrypted = await decryptObject(todo.payload);
-      updatedAt = decrypted.updated_at || decrypted.created_at || new Date().toISOString();
-      assignedTo = decrypted.assigned_to || null;
+      decryptedData = await decryptObject(todo.payload);
+      updatedAt = decryptedData.updated_at || decryptedData.created_at || new Date().toISOString();
+      assignedTo = decryptedData.assigned_to || null;
     } catch {
       updatedAt = new Date().toISOString();
     }
@@ -305,6 +306,19 @@ export async function todosToSyncRecords(ownerNpub) {
     // Include assigned_to in metadata if set
     if (assignedTo) {
       record.metadata.assigned_to = assignedTo;
+
+      // Generate delegate-encrypted copy if we have decrypted data
+      if (decryptedData) {
+        try {
+          const delegateBlob = await encryptObjectToRecipient(decryptedData, assignedTo);
+          record.delegates = [{
+            delegate_pubkey: assignedTo,
+            encrypted_blob: delegateBlob,
+          }];
+        } catch (err) {
+          console.warn(`Failed to encrypt for delegate ${assignedTo}:`, err.message);
+        }
+      }
     }
 
     records.push(record);
@@ -359,10 +373,10 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
   let recordsUpdated = 0;
 
   for (const record of remoteData.records || []) {
-    const match = record.record_id.match(/^todo_(\d+)$/);
+    const match = record.record_id.match(/^todo_([a-f0-9]+)$/i);
     if (!match) continue;
 
-    const localId = parseInt(match[1], 10);
+    const localId = match[1];  // Keep as string - IDs are hex UUIDs
     const serverUpdatedAt = record.updated_at;
     const remoteDeviceId = record.metadata?.device_id;
 
@@ -443,11 +457,12 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
     const recordId = `todo_${todo.id}`;
     const serverRecord = serverRecords.get(recordId);
 
-    // Get local updated_at from decrypted payload
+    // Get local updated_at and assigned_to from decrypted payload
     let localUpdatedAt = null;
+    let decryptedData = null;
     try {
-      const decrypted = await decryptObject(todo.payload);
-      localUpdatedAt = decrypted.updated_at || decrypted.created_at;
+      decryptedData = await decryptObject(todo.payload);
+      localUpdatedAt = decryptedData.updated_at || decryptedData.created_at;
     } catch {
       localUpdatedAt = new Date().toISOString();
     }
@@ -461,7 +476,7 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
     // - Record doesn't exist on server, OR
     // - Local client timestamp is newer than server timestamp (we made changes after last sync)
     if (!serverRecord || localTime > serverTime) {
-      recordsToPush.push({
+      const record = {
         record_id: recordId,
         collection: 'todos',
         encrypted_data: todo.payload,
@@ -471,24 +486,55 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
           updated_at: localUpdatedAt,
           device_id: deviceId,
         },
-      });
+      };
+
+      // Generate delegate-encrypted copy if assigned_to is set
+      const assignedTo = decryptedData?.assigned_to;
+      if (assignedTo && decryptedData) {
+        record.metadata.assigned_to = assignedTo;
+        try {
+          const delegateBlob = await encryptObjectToRecipient(decryptedData, assignedTo);
+          record.delegates = [{
+            delegate_pubkey: assignedTo,
+            encrypted_blob: delegateBlob,
+          }];
+        } catch (err) {
+          console.warn(`Failed to encrypt for delegate ${assignedTo}:`, err.message);
+        }
+      }
+
+      recordsToPush.push(record);
     }
   }
 
   let pushed = 0;
+  const delegateNotifications = [];
+
   if (recordsToPush.length > 0) {
     await client.syncRecords(recordsToPush);
     pushed = recordsToPush.length;
     console.log(`Sync: Pushed ${pushed} records to server`);
 
-    // Update server_updated_at for pushed records
-    // (They'll get the actual timestamp on next pull)
+    // Collect delegate notifications to send
+    for (const record of recordsToPush) {
+      if (record.delegates && record.delegates.length > 0) {
+        for (const delegate of record.delegates) {
+          delegateNotifications.push({
+            delegatePubkey: delegate.delegate_pubkey,
+            recordId: record.record_id,
+            action: 'assign',
+          });
+        }
+      }
+    }
   }
 
+  // Return sync result with delegate notifications to send
   return {
     pushed,
     pulled: newRecordsAdded,
     updated: recordsUpdated,
     syncTime: new Date().toISOString(),
+    delegateNotifications, // App can use DelegationNotifier to send these
   };
 }

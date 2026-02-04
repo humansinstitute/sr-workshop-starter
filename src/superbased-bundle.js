@@ -8,7 +8,7 @@ import {
   ApplesauceRelayPool,
 } from '@contextvm/sdk';
 import { nip19, verifyEvent, finalizeEvent } from 'nostr-tools';
-import { bytesToHex, hexToBytes } from '@noble/hashes/utils';
+import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { Observable, Subject, filter, map, takeUntil } from 'rxjs';
 
 // Sync notification constants
@@ -394,15 +394,202 @@ function createSyncNotifier(options) {
   return new SyncNotifier(options);
 }
 
+// ============================================
+// Delegation Notifier - notifies bots/agents of task assignments
+// Kind: 30081 - Delegation Assignment Notification
+// ============================================
+
+const DELEGATION_NOTIFY_KIND = 30081;
+const DELEGATION_RELAYS = [
+  'wss://relay.damus.io/',
+  'wss://nos.lol/',
+  'wss://purplepag.es/',
+  'wss://relay.nostr.band/',
+  'wss://nostr.mom/',
+];
+
+class DelegationNotifier {
+  constructor(options) {
+    this.userPubkeyHex = options.userPubkeyHex;
+    this.appNpub = options.appNpub;
+    this.privateKeyHex = options.privateKeyHex;
+    this.useExtension = options.useExtension;
+
+    this.signer = null;
+    this.relayPool = null;
+    this.stopSignal = new Subject();
+    this.subscription = null;
+    this.onDelegation = null;
+
+    // Create signer
+    if (this.privateKeyHex) {
+      this.signer = new PrivateKeySigner(this.privateKeyHex);
+    } else if (this.useExtension) {
+      this.signer = new ExtensionSigner(this.userPubkeyHex);
+    }
+
+    // Create relay pool
+    this.relayPool = new ApplesauceRelayPool(DELEGATION_RELAYS);
+
+    console.log('DelegationNotifier: initialized for app:', this.appNpub);
+  }
+
+  // Convert npub to hex if needed
+  _toHex(pubkey) {
+    if (pubkey.startsWith('npub1')) {
+      const decoded = nip19.decode(pubkey);
+      return decoded.data;
+    }
+    return pubkey;
+  }
+
+  // Publish a delegation notification to a delegate
+  async publishAssignment(delegatePubkey, recordId, action = 'assign') {
+    try {
+      const delegateHex = this._toHex(delegatePubkey);
+      const now = Date.now();
+
+      // Create unsigned event (content is empty - actual data is on server)
+      const unsignedEvent = {
+        kind: DELEGATION_NOTIFY_KIND,
+        created_at: Math.floor(now / 1000),
+        tags: [
+          ['d', this.appNpub],           // App namespace
+          ['p', delegateHex],            // Delegate being notified
+          ['record', recordId],          // Record that was assigned
+          ['action', action],            // assign, unassign, update
+        ],
+        content: '',  // Empty - delegate fetches encrypted data from server
+      };
+
+      // Sign event using signer
+      const signedEvent = await this.signer.signEvent(unsignedEvent);
+
+      // Publish using relay pool
+      await this.relayPool.publish(signedEvent);
+      console.log(`DelegationNotifier: published ${action} notification for record ${recordId} to ${delegatePubkey.slice(0, 15)}...`);
+
+      return true;
+    } catch (err) {
+      console.error('DelegationNotifier: publish failed:', err);
+      return false;
+    }
+  }
+
+  // Publish notifications for multiple assignments (batch)
+  async publishAssignments(assignments) {
+    const results = [];
+    for (const { delegatePubkey, recordId, action } of assignments) {
+      const result = await this.publishAssignment(delegatePubkey, recordId, action || 'assign');
+      results.push({ delegatePubkey, recordId, success: result });
+    }
+    return results;
+  }
+
+  // Subscribe to delegation notifications (for bots/agents)
+  // The bot calls this with its own pubkey to listen for task assignments
+  startSubscription(callback) {
+    if (this.subscription) {
+      console.log('DelegationNotifier: already subscribed');
+      return;
+    }
+
+    this.onDelegation = callback;
+
+    const nostrFilter = {
+      kinds: [DELEGATION_NOTIFY_KIND],
+      '#p': [this.userPubkeyHex],  // Events tagging this user as delegate
+      since: Math.floor(Date.now() / 1000) - 300,  // Last 5 minutes
+    };
+
+    console.log('DelegationNotifier: starting subscription with filter:', nostrFilter);
+
+    // Create RxJS Observable from relay pool subscription
+    const eventObservable = new Observable((subscriber) => {
+      this.relayPool.subscribe(
+        [nostrFilter],
+        (event) => {
+          subscriber.next(event);
+        },
+        () => {
+          console.log('DelegationNotifier: received EOSE');
+        }
+      );
+
+      return () => {
+        this.relayPool.unsubscribe();
+      };
+    });
+
+    // Process events with RxJS
+    this.subscription = eventObservable
+      .pipe(takeUntil(this.stopSignal))
+      .subscribe({
+        next: async (event) => {
+          try {
+            // Extract info from tags
+            const recordId = event.tags.find(t => t[0] === 'record')?.[1];
+            const action = event.tags.find(t => t[0] === 'action')?.[1] || 'assign';
+            const appNpub = event.tags.find(t => t[0] === 'd')?.[1];
+            const ownerPubkey = event.pubkey;
+
+            console.log(`DelegationNotifier: received ${action} notification for record ${recordId} from ${ownerPubkey.slice(0, 12)}...`);
+
+            // Trigger callback
+            if (this.onDelegation) {
+              this.onDelegation({
+                action,
+                recordId,
+                appNpub,
+                ownerPubkey,
+                timestamp: event.created_at,
+              });
+            }
+          } catch (err) {
+            console.error('DelegationNotifier: failed to process event:', err);
+          }
+        },
+        error: (err) => {
+          console.error('DelegationNotifier: subscription error:', err);
+        },
+      });
+  }
+
+  // Stop subscription
+  stopSubscription() {
+    if (this.subscription) {
+      this.stopSignal.next();
+      this.subscription.unsubscribe();
+      this.subscription = null;
+      this.onDelegation = null;
+      console.log('DelegationNotifier: stopped subscription');
+    }
+  }
+
+  // Cleanup
+  destroy() {
+    this.stopSubscription();
+  }
+}
+
+// Factory function for DelegationNotifier
+function createDelegationNotifier(options) {
+  return new DelegationNotifier(options);
+}
+
 // Export to window
 window.SuperBasedSDK = {
   createClient,
   createSyncNotifier,
+  createDelegationNotifier,
   parseToken,
   verifyEvent,
   nip19,
   bytesToHex,
   getDeviceId,
+  // Constants for external use
+  DELEGATION_NOTIFY_KIND,
+  DELEGATION_RELAYS,
 };
 
 console.log('SuperBased SDK loaded');

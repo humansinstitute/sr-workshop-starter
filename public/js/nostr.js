@@ -472,6 +472,46 @@ export async function decryptObject(ciphertext) {
 }
 
 // ===========================================
+// NIP-44 Encryption to specific pubkey (for delegation)
+// ===========================================
+
+/**
+ * Encrypt plaintext to a specific recipient pubkey
+ * Used for creating delegate-encrypted copies
+ */
+export async function encryptToRecipient(plaintext, recipientPubkeyHex) {
+  const { nip44, nip19 } = await loadNostrLibs();
+  const secret = getMemorySecret();
+
+  // Convert npub to hex if needed
+  let pubkeyHex = recipientPubkeyHex;
+  if (recipientPubkeyHex.startsWith('npub1')) {
+    const decoded = nip19.decode(recipientPubkeyHex);
+    pubkeyHex = decoded.data;
+  }
+
+  // For extension users
+  if (!secret) {
+    if (window.nostr?.nip44?.encrypt) {
+      return window.nostr.nip44.encrypt(pubkeyHex, plaintext);
+    }
+    throw new Error('No encryption key available. Please log in first.');
+  }
+
+  // Use nostr-tools nip44 for ephemeral/secret users
+  const conversationKey = nip44.v2.utils.getConversationKey(secret, pubkeyHex);
+  return nip44.v2.encrypt(plaintext, conversationKey);
+}
+
+/**
+ * Encrypt a JSON object to a specific recipient
+ */
+export async function encryptObjectToRecipient(obj, recipientPubkeyHex) {
+  const plaintext = JSON.stringify(obj);
+  return encryptToRecipient(plaintext, recipientPubkeyHex);
+}
+
+// ===========================================
 // Profile Fetching
 // ===========================================
 

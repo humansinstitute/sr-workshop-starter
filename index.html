@@ -179,8 +179,8 @@
           <li class="empty-state">No active work. Add something new!</li>
         </template>
         <template x-for="todo in $store.app.activeTodos" :key="todo.id">
-          <li x-data="todoItem(todo)">
-            <details>
+          <li x-data="todoItem(todo)" :class="{ 'todo-saved': $store.app.justSavedTodoId === todo.id }">
+            <details x-effect="if ($store.app.justSavedTodoId === todo.id) $el.open = false">
               <summary>
                 <span class="todo-title" x-text="todo.title"></span>
                 <span class="badges">
@@ -391,17 +391,64 @@
         <h2>SuperBased Sync</h2>
         <p>Connect to SuperBased to sync your todos across devices.</p>
 
-        <div x-show="$store.app.superbasedConnected" class="superbased-status connected">
-          <span class="status-dot"></span>
-          <span>Connected to SuperBased</span>
+        <!-- Connection Details (when connected) -->
+        <div x-show="$store.app.superbasedConnected" class="superbased-connection-details">
+          <div class="connection-status connected">
+            <span class="status-dot"></span>
+            <span>Connected</span>
+          </div>
+          <div class="connection-info">
+            <div class="info-row">
+              <span class="info-label">Server:</span>
+              <span class="info-value" x-text="$store.app.superbasedClient?.config?.httpUrl || 'Unknown'"></span>
+            </div>
+            <div class="info-row">
+              <span class="info-label">App:</span>
+              <span class="info-value info-npub" x-text="$store.app.superbasedClient?.config?.appNpub?.slice(0, 20) + '...' || 'Unknown'"></span>
+            </div>
+            <div class="info-row" x-show="$store.app.lastSyncTime">
+              <span class="info-label">Last sync:</span>
+              <span class="info-value" x-text="$store.app.lastSyncTime"></span>
+            </div>
+          </div>
+          <div class="connection-actions">
+            <button
+              class="auth-option secondary"
+              type="button"
+              @click="$store.app.syncNow()"
+              :disabled="$store.app.isSyncing"
+            >
+              <span x-show="!$store.app.isSyncing">Sync Now</span>
+              <span x-show="$store.app.isSyncing">Syncing...</span>
+            </button>
+            <button
+              class="auth-option danger"
+              type="button"
+              @click="$store.app.disconnectSuperBased()"
+            >Disconnect</button>
+          </div>
         </div>
 
-        <form class="auth-form" @submit.prevent="$store.app.saveSuperBasedToken()">
+        <!-- Quick Connect (when not connected) -->
+        <div x-show="!$store.app.superbasedConnected" class="superbased-quick-connect">
+          <button
+            class="auth-option otherstuff-connect"
+            type="button"
+            @click="$store.app.connectWithOtherStuff()"
+            :disabled="$store.app.isSavingSuperBased"
+          >
+            <span x-show="!$store.app.isSavingSuperBased">Connect with OtherStuff Superbased</span>
+            <span x-show="$store.app.isSavingSuperBased">Connecting...</span>
+          </button>
+          <p class="quick-connect-divider">or paste a custom token</p>
+        </div>
+
+        <!-- Manual Token Input (when not connected) -->
+        <form x-show="!$store.app.superbasedConnected" class="auth-form" @submit.prevent="$store.app.saveSuperBasedToken()">
           <label>
-            Paste your SuperBased token:
             <textarea
               x-model="$store.app.superbasedTokenInput"
-              rows="4"
+              rows="3"
               placeholder="Paste token from 'bun run cli' here..."
               class="token-input"
             ></textarea>
@@ -409,36 +456,15 @@
           <p class="auth-error" x-show="$store.app.superbasedError" x-text="$store.app.superbasedError"></p>
           <div class="superbased-actions">
             <button
-              class="auth-option secondary"
-              type="button"
-              x-show="$store.app.superbasedConnected"
-              @click="$store.app.disconnectSuperBased()"
-            >Disconnect</button>
-            <button
               class="auth-option"
               type="submit"
-              :disabled="$store.app.isSavingSuperBased"
+              :disabled="$store.app.isSavingSuperBased || !$store.app.superbasedTokenInput"
             >
-              <span x-show="!$store.app.isSavingSuperBased" x-text="$store.app.superbasedConnected ? 'Update Token' : 'Connect'"></span>
+              <span x-show="!$store.app.isSavingSuperBased">Connect</span>
               <span x-show="$store.app.isSavingSuperBased">Connecting...</span>
             </button>
           </div>
         </form>
-
-        <div class="superbased-sync-status" x-show="$store.app.superbasedConnected">
-          <p x-show="$store.app.lastSyncTime">
-            Last synced: <span x-text="$store.app.lastSyncTime"></span>
-          </p>
-          <button
-            class="auth-option secondary"
-            type="button"
-            @click="$store.app.syncNow()"
-            :disabled="$store.app.isSyncing"
-          >
-            <span x-show="!$store.app.isSyncing">Sync Now</span>
-            <span x-show="$store.app.isSyncing">Syncing...</span>
-          </button>
-        </div>
       </div>
     </div>
 
