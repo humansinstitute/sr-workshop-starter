@@ -19,7 +19,7 @@ function generateTodoId() {
 }
 
 // Fields that are stored encrypted in the payload
-const ENCRYPTED_FIELDS = ['title', 'description', 'priority', 'state', 'tags', 'scheduled_for', 'done', 'deleted', 'created_at', 'updated_at'];
+const ENCRYPTED_FIELDS = ['title', 'description', 'priority', 'state', 'tags', 'scheduled_for', 'done', 'deleted', 'created_at', 'updated_at', 'assigned_to'];
 
 // Encrypt todo data before storage
 async function encryptTodo(todo) {
@@ -62,7 +62,7 @@ async function decryptTodos(encryptedTodos) {
 
 // CRUD operations
 
-export async function createTodo({ title, description = '', priority = 'sand', owner, tags = '', scheduled_for = null }) {
+export async function createTodo({ title, description = '', priority = 'sand', owner, tags = '', scheduled_for = null, assigned_to = null }) {
   const now = new Date().toISOString();
   const id = generateTodoId(); // Use UUID instead of auto-increment
 
@@ -75,6 +75,7 @@ export async function createTodo({ title, description = '', priority = 'sand', o
     owner,
     tags,
     scheduled_for,
+    assigned_to,
     deleted: 0,
     done: 0,
     created_at: now,

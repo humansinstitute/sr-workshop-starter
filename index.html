@@ -63,6 +63,7 @@
             @click="$store.app.showLoginQr()"
           >Show Login QR</button>
           <button type="button" @click="$store.app.openSuperBasedSettings()">SuperBased Sync</button>
+          <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.openDelegationsModal()">Delegations</button>
           <button type="button" @click="$store.app.logout()">Log out</button>
         </div>
       </div>
@@ -244,6 +245,11 @@
                         placeholder="Type and press comma..."
                       />
                     </div>
+                  </label>
+                  <label class="assigned-to-field">
+                    Assign To (npub)
+                    <input type="text" x-model="localTodo.assigned_to" placeholder="npub1... (optional)" />
+                    <span class="assigned-to-hint">Delegate must have write permission to update</span>
                   </label>
                   <button type="submit">Update</button>
                 </form>
@@ -432,6 +438,73 @@
             <span x-show="!$store.app.isSyncing">Sync Now</span>
             <span x-show="$store.app.isSyncing">Syncing...</span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delegations Modal -->
+    <div
+      class="modal-overlay"
+      x-show="$store.app.showDelegationsModal"
+      @click.self="$store.app.showDelegationsModal = false"
+      @keydown.escape.window="$store.app.showDelegationsModal = false"
+    >
+      <div class="modal delegations-modal">
+        <button class="modal-close" type="button" @click="$store.app.showDelegationsModal = false">&times;</button>
+        <h2>Delegations</h2>
+        <p>Grant other users read or write access to your todos.</p>
+
+        <!-- Add Delegation Form -->
+        <div class="delegation-section">
+          <h3>Grant Access</h3>
+          <form class="delegation-form" @submit.prevent="$store.app.addDelegation()">
+            <input
+              type="text"
+              x-model="$store.app.newDelegateNpub"
+              placeholder="npub1..."
+              autocomplete="off"
+            />
+            <div class="permission-checkboxes">
+              <label>
+                <input type="checkbox" x-model="$store.app.delegatePermRead" />
+                Read (view your todos)
+              </label>
+              <label>
+                <input type="checkbox" x-model="$store.app.delegatePermWrite" />
+                Write (edit your todos)
+              </label>
+            </div>
+            <button class="auth-option" type="submit">Grant Access</button>
+          </form>
+          <p class="auth-error" x-show="$store.app.delegationError" x-text="$store.app.delegationError"></p>
+        </div>
+
+        <!-- Current Delegations -->
+        <div class="delegation-section">
+          <h3>Current Delegations</h3>
+          <div x-show="$store.app.isLoadingDelegations" class="loading">Loading...</div>
+          <ul class="delegation-list" x-show="!$store.app.isLoadingDelegations">
+            <template x-if="$store.app.delegations.length === 0">
+              <li class="empty-delegations">No delegations yet</li>
+            </template>
+            <template x-for="delegation in $store.app.delegations" :key="delegation.id">
+              <li class="delegation-item">
+                <div class="delegation-info">
+                  <span class="delegation-npub" x-text="$store.app.formatNpubShort(delegation.delegate_pubkey)"></span>
+                  <span class="delegation-perms">
+                    <template x-for="perm in delegation.permissions" :key="perm">
+                      <span class="perm-badge" :class="perm" x-text="perm"></span>
+                    </template>
+                  </span>
+                </div>
+                <button
+                  class="revoke-btn"
+                  type="button"
+                  @click="$store.app.revokeDelegation(delegation.delegate_pubkey)"
+                >Revoke</button>
+              </li>
+            </template>
+          </ul>
         </div>
       </div>
     </div>

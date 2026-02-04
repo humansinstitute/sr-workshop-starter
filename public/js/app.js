@@ -17,6 +17,7 @@ import {
   setMemoryPubkey,
   tryAutoLoginFromStorage,
   fetchProfile,
+  loadNostrLibs,
   STORAGE_KEYS,
 } from './nostr.js';
 import {
@@ -100,6 +101,16 @@ Alpine.store('app', {
   hasUnsyncedChanges: false,
   lastLocalChangeTime: null,
   lastSuccessfulSyncTime: null,
+
+  // Delegation state
+  showDelegationsModal: false,
+  delegations: [],
+  newDelegateNpub: '',
+  delegatePermRead: true,
+  delegatePermWrite: false,
+  delegationError: null,
+  isLoadingDelegations: false,
+  delegatedTodos: [],
 
   // New todo input
   newTodoTitle: '',
@@ -824,442 +835,91 @@ Alpine.store('app', {
       return null;
     }
   },
-=======
+
+  // ===========================================
+  // Delegation Methods
+  // ===========================================
+
+  openDelegationsModal() {
+    this.showAvatarMenu = false;
+    this.delegationError = null;
+    this.newDelegateNpub = '';
+    this.delegatePermRead = true;
+    this.delegatePermWrite = false;
+    this.showDelegationsModal = true;
+    this.loadDelegations();
+  },
+
+  async loadDelegations() {
+    if (!this.superbasedClient) return;
+
+    this.isLoadingDelegations = true;
     try {
-      // Parse token
-      const config = parseToken(token);
-
-      // Verify signature
-      const valid = await verifyToken(token);
-      if (!valid) {
-        this.superbasedError = 'Invalid token signature';
-        return;
-      }
-
-      this.superbasedConfig = config;
-      await saveToken(token);
-      this.superbasedHasToken = true;
+      const result = await this.superbasedClient.listDelegations();
+      this.delegations = result.delegations || [];
     } catch (err) {
-      this.superbasedError = err.message;
-    }
-  },
-
-  async clearSuperbasedToken() {
-    // Stop background sync when clearing token
-    this.stopBackgroundSync();
-
-    await clearToken();
-    this.superbasedTokenInput = '';
-    this.superbasedConfig = null;
-    this.superbasedHasToken = false;
-    this.superbasedError = null;
-  },
-
-  async syncToSuperbased() {
-    if (!this.superbasedConfig || !this.session?.npub) return;
-
-    this.superbasedError = null;
-    this.superbasedSyncStatus = 'connecting';
-
-    try {
-      // Create client and connect
-      const token = this.superbasedTokenInput.trim() || await loadToken();
-      this.superbasedClient = new SuperBasedClient(token);
-      await this.superbasedClient.connect();
-
-      // Check health
-      await this.superbasedClient.health();
-
-      // Format local todos for sync
-      this.superbasedSyncStatus = 'uploading';
-      const records = await formatForSync(this.session.npub);
-
-      if (records.length === 0) {
-        this.superbasedError = 'No todos to sync';
-        this.superbasedSyncStatus = null;
-        return;
-      }
-
-      // Upload to SuperBased
-      const result = await this.superbasedClient.syncRecords(records);
-      console.log('Sync result:', result);
-
-      // Update last sync time
-      setLastSyncTime(this.session.npub, new Date().toISOString());
-
-      this.superbasedSyncStatus = 'done';
-
-      // Start background sync after successful manual sync
-      this.startBackgroundSync();
-    } catch (err) {
-      console.error('SuperBased sync failed:', err);
-      this.superbasedError = err.message;
-      this.superbasedSyncStatus = 'error';
-    }
-  },
-
-  async downloadFromSuperbased() {
-    console.log('downloadFromSuperbased called, config:', !!this.superbasedConfig, 'session:', !!this.session?.npub);
-    if (!this.superbasedConfig || !this.session?.npub) {
-      console.log('downloadFromSuperbased: skipping, missing config or session');
-      return;
-    }
-
-    this.superbasedError = null;
-    this.superbasedSyncStatus = 'connecting';
-
-    try {
-      // Create client and connect
-      const token = this.superbasedTokenInput.trim() || await loadToken();
-      this.superbasedClient = new SuperBasedClient(token);
-      await this.superbasedClient.connect();
-
-      // Fetch records
-      this.superbasedSyncStatus = 'downloading';
-      console.log('downloadFromSuperbased: fetching records...');
-      const result = await this.superbasedClient.fetchRecords({ collection: 'todos' });
-      console.log('downloadFromSuperbased: fetch result:', result);
-      const records = result?.records;
-
-      if (!records || records.length === 0) {
-        console.log('downloadFromSuperbased: no records found');
-        this.superbasedError = 'No records found on server';
-        this.superbasedSyncStatus = null;
-        return;
-      }
-      console.log('downloadFromSuperbased: got', records.length, 'records');
-
-      // Merge with local data
-      this.superbasedSyncStatus = 'merging';
-      const { toImport, conflicts, skipped } = await mergeRemoteRecords(this.session.npub, records);
-
-      console.log('Merge result:', { toImport: toImport.length, conflicts: conflicts.length, skipped: skipped.length });
-
-      // Import non-conflicting records
-      if (toImport.length > 0) {
-        await importParsedRecords(toImport);
-      }
-
-      // Handle conflicts
-      if (conflicts.length > 0) {
-        this.superbasedConflicts = conflicts;
-        this.superbasedSyncStatus = 'conflicts';
-        return;
-      }
-
-      // Update last sync time
-      setLastSyncTime(this.session.npub, new Date().toISOString());
-
-      // Reload todos
-      await this.loadTodos();
-
-      this.superbasedSyncStatus = 'done';
-
-      // Start background sync after successful download
-      this.startBackgroundSync();
-    } catch (err) {
-      console.error('SuperBased download failed:', err);
-      this.superbasedError = err.message;
-      this.superbasedSyncStatus = 'error';
-    }
-  },
-
-  async resolveConflict(conflict, choice) {
-    // choice: 'keep_local' | 'use_remote'
-    if (choice === 'use_remote') {
-      await forceImportRecord(conflict.remote);
-    }
-    // Remove from conflicts list
-    this.superbasedConflicts = this.superbasedConflicts.filter(c => c !== conflict);
-
-    // If no more conflicts, finish up
-    if (this.superbasedConflicts.length === 0) {
-      setLastSyncTime(this.session.npub, new Date().toISOString());
-      await this.loadTodos();
-      this.superbasedSyncStatus = 'done';
-    }
-  },
-
-  async resolveAllConflicts(choice) {
-    // choice: 'keep_all_local' | 'use_all_remote'
-    if (choice === 'use_all_remote') {
-      for (const conflict of this.superbasedConflicts) {
-        await forceImportRecord(conflict.remote);
-      }
-    }
-    this.superbasedConflicts = [];
-    setLastSyncTime(this.session.npub, new Date().toISOString());
-    await this.loadTodos();
-    this.superbasedSyncStatus = 'done';
-
-    // Start background sync after resolving conflicts
-    this.startBackgroundSync();
-  },
-
-  // Trigger sync after a local change (debounced to batch rapid changes)
-  syncAfterChange() {
-    console.log('syncAfterChange called, superbasedConfig:', !!this.superbasedConfig);
-    // Skip if no token configured
-    if (!this.superbasedConfig) {
-      console.log('syncAfterChange: no config, skipping');
-      return;
-    }
-
-    // Clear existing debounce timer
-    if (this.superbasedChangeDebounce) {
-      clearTimeout(this.superbasedChangeDebounce);
-    }
-
-    console.log('syncAfterChange: scheduling upload in 100ms');
-    // Debounce: wait 100ms after last change before syncing
-    this.superbasedChangeDebounce = setTimeout(() => {
-      this.superbasedChangeDebounce = null;
-      this.uploadChanges();
-    }, 100);
-  },
-
-  // Upload-only sync (doesn't download, for quick change sync)
-  async uploadChanges() {
-    console.log('uploadChanges called');
-    if (!this.superbasedConfig || !this.session?.npub) {
-      console.log('uploadChanges: no config or session, skipping');
-      return;
-    }
-    if (this.superbasedBackgroundSyncing) {
-      console.log('uploadChanges: background sync in progress, skipping');
-      return;
-    }
-    if (this.superbasedSyncStatus) {
-      console.log('uploadChanges: manual sync in progress, skipping');
-      return;
-    }
-
-    console.log('SuperBased: uploading changes');
-
-    try {
-      const token = await loadToken();
-      if (!token) return;
-
-      const client = new SuperBasedClient(token);
-      await client.connect();
-
-      const records = await formatForSync(this.session.npub);
-      if (records.length > 0) {
-        await client.syncRecords(records);
-        console.log('SuperBased: uploaded', records.length, 'records');
-
-        // Publish notification to other devices
-        console.log('SuperBased: publishing notification, notifier exists:', !!this.superbasedSyncNotifier);
-        if (this.superbasedSyncNotifier) {
-          const published = await this.superbasedSyncNotifier.publish();
-          console.log('SuperBased: notification published:', published);
-        } else {
-          console.log('SuperBased: no notifier, skipping publish');
-        }
-      }
-
-      setLastSyncTime(this.session.npub, new Date().toISOString());
-      await client.disconnect();
-    } catch (err) {
-      console.error('SuperBased: upload failed:', err.message);
-    }
-  },
-
-  // Initialize background sync from saved token (called on app startup)
-  async initBackgroundSync() {
-    const savedToken = await loadToken();
-    if (!savedToken) return;
-
-    try {
-      this.superbasedConfig = parseToken(savedToken);
-      this.superbasedHasToken = true;
-      console.log('SuperBased: found saved token, starting background sync');
-      this.startBackgroundSync();
-    } catch (err) {
-      console.error('SuperBased: invalid saved token:', err.message);
-      await clearToken();
-    }
-  },
-
-  // Background sync - download only, updates local with newer cloud records
-  // Uses incremental sync with `since` parameter for efficiency
-  async backgroundSync(fullSync = false) {
-    // Skip if not configured or already syncing
-    if (!this.superbasedConfig || !this.session?.npub) return;
-    if (this.superbasedBackgroundSyncing) return;
-    if (this.superbasedSyncStatus) return; // Manual sync in progress
-
-    this.superbasedBackgroundSyncing = true;
-
-    try {
-      const token = await loadToken();
-      if (!token) return;
-
-      const client = new SuperBasedClient(token);
-      await client.connect();
-
-      // Use incremental sync - only fetch records updated since last sync
-      const lastSync = fullSync ? null : getLastSyncTime(this.session.npub);
-      console.log('SuperBased: background download starting', lastSync ? `(since ${lastSync})` : '(full sync)');
-
-      // Download remote changes only - cloud overwrites local if newer
-      const { records: remoteRecords } = await client.fetchRecords({
-        collection: 'todos',
-        since: lastSync || undefined,
-      });
-
-      console.log('SuperBased: fetched', remoteRecords?.length || 0, 'records from cloud');
-
-      if (remoteRecords && remoteRecords.length > 0) {
-        const { toImport, toUploadIds, skipped } = await mergeRemoteRecords(this.session.npub, remoteRecords);
-
-        // Import newer records from cloud
-        if (toImport.length > 0) {
-          await importParsedRecords(toImport);
-          await this.loadTodos();
-          console.log('SuperBased: imported', toImport.length, 'newer records from cloud');
-        }
-
-        // Upload local records that are newer or missing from cloud
-        if (toUploadIds.length > 0) {
-          const recordsToUpload = await formatTodosByIdForSync(toUploadIds);
-          if (recordsToUpload.length > 0) {
-            await client.syncRecords(recordsToUpload);
-            console.log('SuperBased: uploaded', recordsToUpload.length, 'newer local records to cloud');
-
-            // Notify other devices about our upload
-            if (this.superbasedSyncNotifier) {
-              await this.superbasedSyncNotifier.publish();
-            }
-          }
-        }
-      }
-
-      setLastSyncTime(this.session.npub, new Date().toISOString());
-      this.superbasedLastBackgroundSync = Date.now();
-      console.log('SuperBased: background sync complete');
-
-      await client.disconnect();
-    } catch (err) {
-      console.error('SuperBased: background sync failed:', err.message);
+      console.error('Failed to load delegations:', err);
+      this.delegationError = err.message;
     } finally {
-      this.superbasedBackgroundSyncing = false;
+      this.isLoadingDelegations = false;
     }
   },
 
-  // Start event-based background sync (subscribes to Nostr notifications)
-  async startBackgroundSync() {
-    if (this.superbasedSyncNotifier) return;
-    if (!this.superbasedConfig) return;
+  async addDelegation() {
+    if (!this.newDelegateNpub.trim()) {
+      this.delegationError = 'Please enter an npub';
+      return;
+    }
 
-    const token = await loadToken();
-    if (!token) return;
+    const permissions = [];
+    if (this.delegatePermRead) permissions.push('read');
+    if (this.delegatePermWrite) permissions.push('write');
+
+    if (permissions.length === 0) {
+      this.delegationError = 'Select at least one permission';
+      return;
+    }
+
+    this.delegationError = null;
 
     try {
-      // Create and initialize sync notifier
-      this.superbasedSyncNotifier = new SyncNotifier(token);
-      await this.superbasedSyncNotifier.init();
-
-      // Subscribe to sync notifications from other devices
-      this.superbasedSyncNotifier.startSubscription((payload) => {
-        console.log('SuperBased: received sync notification from device:', payload.deviceId);
-        // Trigger background download when another device publishes
-        this.backgroundSync();
-      });
-
-      console.log('SuperBased: started event-based sync subscription');
-
-      // Also sync when app becomes visible (in case we missed notifications)
-      document.addEventListener('visibilitychange', this._handleVisibilityChange);
-
-      // Start 1-second polling as fallback for missed notifications
-      this._startPolling();
-
-      // Initial sync after short delay
-      setTimeout(() => this.backgroundSync(), 2000);
+      await this.superbasedClient.grantDelegation(
+        this.newDelegateNpub.trim(),
+        permissions
+      );
+      this.newDelegateNpub = '';
+      this.delegatePermRead = true;
+      this.delegatePermWrite = false;
+      await this.loadDelegations();
     } catch (err) {
-      console.error('SuperBased: failed to start sync notifier:', err.message);
+      console.error('Failed to grant delegation:', err);
+      this.delegationError = err.message;
     }
   },
 
-  // Start 1-second polling for missed notifications
-  _startPolling() {
-    if (this.superbasedPollInterval) return;
-
-    this.superbasedPollInterval = setInterval(() => {
-      // Only poll if app is visible and not already syncing
-      if (!document.hidden && !this.superbasedBackgroundSyncing) {
-        this.backgroundSync(); // Uses incremental sync (since last sync)
-      }
-    }, 1000);
-
-    console.log('SuperBased: started 1s polling fallback');
-  },
-
-  // Stop polling
-  _stopPolling() {
-    if (this.superbasedPollInterval) {
-      clearInterval(this.superbasedPollInterval);
-      this.superbasedPollInterval = null;
-      console.log('SuperBased: stopped polling');
-    }
-  },
-
-  // Stop event-based background sync
-  stopBackgroundSync() {
-    if (this.superbasedSyncNotifier) {
-      this.superbasedSyncNotifier.destroy();
-      this.superbasedSyncNotifier = null;
-      console.log('SuperBased: stopped sync subscription');
-    }
-    this._stopPolling();
-    document.removeEventListener('visibilitychange', this._handleVisibilityChange);
-  },
-
-  // Handle visibility change (sync when returning to app)
-  _handleVisibilityChange() {
-    const store = Alpine.store('app');
-    console.log('SuperBased: visibility changed, hidden:', document.hidden, 'config:', !!store.superbasedConfig);
-    if (!document.hidden && store.superbasedConfig) {
-      console.log('SuperBased: app became visible, restarting subscription and doing full sync');
-      // Restart subscription (mobile browsers kill WebSockets when backgrounded)
-      store.restartBackgroundSync();
-      // Do full sync since we might have missed notifications while backgrounded
-      store.backgroundSync(true); // fullSync = true
-    }
-  },
-
-  // Restart the subscription (for when mobile browsers kill the connection)
-  async restartBackgroundSync() {
-    if (!this.superbasedConfig) return;
-
-    // Stop existing subscription if any
-    if (this.superbasedSyncNotifier) {
-      this.superbasedSyncNotifier.stopSubscription();
-    }
-
-    const token = await loadToken();
-    if (!token) return;
+  async revokeDelegation(delegatePubkey) {
+    if (!confirm('Revoke access for this user?')) return;
 
     try {
-      // Recreate notifier if needed
-      if (!this.superbasedSyncNotifier) {
-        this.superbasedSyncNotifier = new SyncNotifier(token);
-        await this.superbasedSyncNotifier.init();
-      }
-
-      // Restart the subscription
-      this.superbasedSyncNotifier.startSubscription((payload) => {
-        console.log('SuperBased: received sync notification from device:', payload.deviceId);
-        this.backgroundSync();
-      });
-
-      console.log('SuperBased: restarted event-based sync subscription');
+      // Need to convert pubkey hex to npub for the API
+      const { nip19 } = await loadNostrLibs();
+      const delegateNpub = nip19.npubEncode(delegatePubkey);
+      await this.superbasedClient.revokeDelegation(delegateNpub);
+      await this.loadDelegations();
     } catch (err) {
-      console.error('SuperBased: failed to restart sync:', err.message);
+      console.error('Failed to revoke delegation:', err);
+      this.delegationError = err.message;
     }
   },
 
+  formatNpubShort(pubkeyHex) {
+    if (!pubkeyHex) return '';
+    return pubkeyHex.slice(0, 8) + '...' + pubkeyHex.slice(-4);
+  },
+
+  formatPermissions(permissions) {
+    return (permissions || []).join(', ');
+  },
 });
 
 // Todo item component
@@ -1303,6 +963,7 @@ Alpine.data('todoItem', (todo) => ({
         state: this.localTodo.state,
         scheduled_for: this.localTodo.scheduled_for || null,
         tags: this.localTodo.tags,
+        assigned_to: this.localTodo.assigned_to || null,
       });
       store.stopEditing();
       // Close the details element

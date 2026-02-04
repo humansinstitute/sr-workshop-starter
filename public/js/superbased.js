@@ -225,30 +225,72 @@ export class SuperBasedClient {
 
     return this.request(path, 'GET');
   }
+
+  /**
+   * Grant delegation to another npub
+   */
+  async grantDelegation(delegateNpub, permissions) {
+    return this.request(`/apps/${this.config.appNpub}/delegate`, 'POST', {
+      delegate_npub: delegateNpub,
+      permissions: permissions,
+    });
+  }
+
+  /**
+   * List delegations granted by the current user
+   */
+  async listDelegations() {
+    return this.request(`/apps/${this.config.appNpub}/delegations`, 'GET');
+  }
+
+  /**
+   * Revoke a delegation
+   */
+  async revokeDelegation(delegateNpub) {
+    return this.request(`/apps/${this.config.appNpub}/delegate/${delegateNpub}`, 'DELETE');
+  }
+
+  /**
+   * Fetch records delegated to the current user
+   */
+  async fetchDelegatedRecords(options = {}) {
+    const params = new URLSearchParams();
+    params.set('delegate', 'true');
+    if (options.collection) params.set('collection', options.collection);
+    if (options.since) params.set('since', options.since);
+
+    const queryString = params.toString();
+    const path = `/records/${this.config.appNpub}/fetch?${queryString}`;
+
+    return this.request(path, 'GET');
+  }
 }
 
 /**
  * Convert local todos to sync format
  * Each todo becomes a record with encrypted_data being the payload
  * Includes updated_at and device_id in metadata for conflict resolution
+ * Supports assigned_to for delegation
  */
 export async function todosToSyncRecords(ownerNpub) {
   // Get raw encrypted todos from DB
   const encryptedTodos = await getEncryptedTodosByOwner(ownerNpub);
   const deviceId = getDeviceId();
 
-  // Decrypt each to get updated_at for metadata
+  // Decrypt each to get updated_at and assigned_to for metadata
   const records = [];
   for (const todo of encryptedTodos) {
     let updatedAt = null;
+    let assignedTo = null;
     try {
       const decrypted = await decryptObject(todo.payload);
       updatedAt = decrypted.updated_at || decrypted.created_at || new Date().toISOString();
+      assignedTo = decrypted.assigned_to || null;
     } catch {
       updatedAt = new Date().toISOString();
     }
 
-    records.push({
+    const record = {
       record_id: `todo_${todo.id}`,
       collection: 'todos',
       encrypted_data: todo.payload,
@@ -258,7 +300,14 @@ export async function todosToSyncRecords(ownerNpub) {
         updated_at: updatedAt,
         device_id: deviceId,
       },
-    });
+    };
+
+    // Include assigned_to in metadata if set
+    if (assignedTo) {
+      record.metadata.assigned_to = assignedTo;
+    }
+
+    records.push(record);
   }
 
   return records;
