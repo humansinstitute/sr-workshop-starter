@@ -115,6 +115,28 @@ a {
   transform: translateY(-1px);
   box-shadow: var(--shadow-strong);
 }
+
+/* Sync status ring indicators */
+.avatar-chip.sync-status-synced {
+  box-shadow: 0 0 0 3px #22c55e, var(--shadow-soft); /* green */
+}
+.avatar-chip.sync-status-unsynced {
+  box-shadow: 0 0 0 3px #f97316, var(--shadow-soft); /* orange */
+}
+.avatar-chip.sync-status-syncing {
+  box-shadow: 0 0 0 3px #3b82f6, var(--shadow-soft); /* blue */
+  animation: sync-pulse 1.5s ease-in-out infinite;
+}
+@keyframes sync-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px #3b82f6, var(--shadow-soft); }
+  50% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4), var(--shadow-soft); }
+}
+.avatar-chip.sync-status-synced:hover,
+.avatar-chip.sync-status-unsynced:hover,
+.avatar-chip.sync-status-syncing:hover {
+  transform: translateY(-1px);
+}
+
 .avatar-chip img {
   width: 100%;
   height: 100%;

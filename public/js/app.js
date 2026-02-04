@@ -96,6 +96,10 @@ Alpine.store('app', {
   superbasedClient: null,
   syncNotifier: null,
   syncPollInterval: null,
+  // Sync status tracking
+  hasUnsyncedChanges: false,
+  lastLocalChangeTime: null,
+  lastSuccessfulSyncTime: null,
 
   // New todo input
   newTodoTitle: '',
@@ -133,6 +137,14 @@ Alpine.store('app', {
       parseTags(t.tags).forEach(tag => tagSet.add(tag));
     });
     return Array.from(tagSet).sort();
+  },
+
+  // Sync status: 'disconnected' | 'syncing' | 'unsynced' | 'synced'
+  get syncStatus() {
+    if (!this.superbasedConnected) return 'disconnected';
+    if (this.isSyncing) return 'syncing';
+    if (this.hasUnsyncedChanges) return 'unsynced';
+    return 'synced';
   },
 
   get avatarFallback() {
@@ -291,6 +303,10 @@ Alpine.store('app', {
     this.newTodoTitle = '';
     await this.loadTodos();
 
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
+
     // Auto-sync if connected
     if (this.superbasedClient && !this.isSyncing) {
       this.syncNow();
@@ -300,11 +316,24 @@ Alpine.store('app', {
   async updateTodoField(id, field, value) {
     await updateTodo(id, { [field]: value });
     await this.loadTodos();
+
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
+
+    // Auto-sync if connected
+    if (this.superbasedClient && !this.isSyncing) {
+      this.syncNow();
+    }
   },
 
   async transitionState(id, newState) {
     await transitionTodoState(id, newState);
     await this.loadTodos();
+
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
 
     // Auto-sync if connected
     if (this.superbasedClient && !this.isSyncing) {
@@ -315,6 +344,10 @@ Alpine.store('app', {
   async deleteTodoItem(id) {
     await deleteTodo(id);
     await this.loadTodos();
+
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
 
     // Auto-sync if connected
     if (this.superbasedClient && !this.isSyncing) {
@@ -668,6 +701,9 @@ Alpine.store('app', {
     this.superbasedClient = null;
     this.superbasedTokenInput = '';
     this.lastSyncTime = null;
+    this.lastSuccessfulSyncTime = null;
+    this.lastLocalChangeTime = null;
+    this.hasUnsyncedChanges = false;
     this.showSuperBasedModal = false;
   },
 
@@ -676,12 +712,19 @@ Alpine.store('app', {
     if (this.isSyncing) return; // Prevent concurrent syncs
 
     this.isSyncing = true;
+    const syncStartTime = Date.now();
 
     try {
       const result = await performSync(this.superbasedClient, this.session.npub);
 
       // Update last sync time for display
       this.lastSyncTime = new Date().toLocaleString();
+      this.lastSuccessfulSyncTime = Date.now();
+
+      // Clear unsynced flag if no local changes occurred during sync
+      if (!this.lastLocalChangeTime || this.lastLocalChangeTime <= syncStartTime) {
+        this.hasUnsyncedChanges = false;
+      }
 
       // Reload UI if we pulled new records or updated existing ones (avoids unnecessary redraws)
       if (result.pulled > 0 || result.updated > 0) {
@@ -693,7 +736,7 @@ Alpine.store('app', {
         await this.syncNotifier.publish();
       }
     } catch (err) {
-      // Silent fail for background polling
+      // Silent fail for background polling, but keep hasUnsyncedChanges true
       if (!skipNotify) {
         this.superbasedError = err.message;
       }
@@ -820,6 +863,10 @@ Alpine.data('todoItem', (todo) => ({
       const details = this.$el.querySelector('details');
       if (details) details.open = false;
       await store.loadTodos();
+
+      // Mark as having unsynced changes
+      store.hasUnsyncedChanges = true;
+      store.lastLocalChangeTime = Date.now();
 
       // Trigger sync after save
       if (store.superbasedClient && !store.isSyncing) {

@@ -26,9 +26,14 @@
       <div class="session-controls" x-show="$store.app.isLoggedIn">
         <button
           class="avatar-chip"
+          :class="{
+            'sync-status-synced': $store.app.syncStatus === 'synced',
+            'sync-status-unsynced': $store.app.syncStatus === 'unsynced',
+            'sync-status-syncing': $store.app.syncStatus === 'syncing'
+          }"
           type="button"
           @click="$store.app.showAvatarMenu = !$store.app.showAvatarMenu"
-          title="Account menu"
+          :title="$store.app.syncStatus === 'synced' ? 'Synced with SuperBased' : $store.app.syncStatus === 'unsynced' ? 'Local changes not synced' : $store.app.syncStatus === 'syncing' ? 'Syncing...' : 'Account menu'"
         >
           <img
             x-show="$store.app.avatarUrl"
