@@ -370,9 +370,18 @@ export function hasEphemeralSecret() {
 
 // Export nsec for ephemeral accounts
 export async function exportNsec() {
+  const { nip19 } = await loadNostrLibs();
+
+  // Check secure storage first (current method)
+  const creds = await getStoredCredentials();
+  if (creds?.secretHex && (creds.method === 'ephemeral' || creds.method === 'secret')) {
+    const secret = hexToBytes(creds.secretHex);
+    return nip19.nsecEncode(secret);
+  }
+
+  // Fallback to legacy localStorage
   const stored = localStorage.getItem(STORAGE_KEYS.EPHEMERAL_SECRET);
   if (!stored) return null;
-  const { nip19 } = await loadNostrLibs();
   const secret = hexToBytes(stored);
   return nip19.nsecEncode(secret);
 }

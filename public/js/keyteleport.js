@@ -1,17 +1,21 @@
 // Key Teleport - Secure Nostr identity transfer
 // Instance keypair management + teleport handling
 
-import Dexie from 'https://esm.sh/dexie@4.0.10';
 import { loadNostrLibs, hexToBytes, bytesToHex } from './nostr.js';
 
-// Separate database for instance identity (app-level, not user-level)
-const instanceDb = new Dexie('KeyTeleportInstance');
+// ===========================================
+// WORKSHOP MODE: Hardcoded App Key
+// ===========================================
+// This key is intentionally hardcoded and PUBLIC.
+// It only protects the transport layer of key teleport.
+// The user's actual nsec is protected by the unlock code.
+//
+// npub1a7ndppgqwf9ty25kzpwx9r2vcgskym23l7ftndz7g34xwq86hd3qak8sza
+const WORKSHOP_APP_KEY = {
+  privateKeyHex: '71710d0db75e3d7acda7774aa15b3abcc7b80fde7b544b4a6d16746a88a9f66a',
+  publicKeyHex: 'efa6d08500724ab22a96105c628d4cc221626d51ff92b9b45e446a6700fabb62',
+};
 
-instanceDb.version(1).stores({
-  identity: 'id',
-});
-
-const INSTANCE_ID = 'instance-keypair';
 const KEYTELEPORT_KIND = 30078;
 
 // ===========================================
@@ -19,32 +23,14 @@ const KEYTELEPORT_KIND = 30078;
 // ===========================================
 
 /**
- * Get or create the instance keypair
- * Generated once per browser, stored permanently
+ * Get the app keypair for key teleport
+ * WORKSHOP MODE: Returns hardcoded key (same for all instances)
  */
 export async function getOrCreateInstanceKey() {
-  const stored = await instanceDb.identity.get(INSTANCE_ID);
-  if (stored?.privateKeyHex) {
-    return {
-      privateKeyHex: stored.privateKeyHex,
-      publicKeyHex: stored.publicKeyHex,
-    };
-  }
-
-  // Generate new keypair
-  const { pure, nip19 } = await loadNostrLibs();
-  const privateKey = pure.generateSecretKey();
-  const publicKeyHex = pure.getPublicKey(privateKey);
-  const privateKeyHex = bytesToHex(privateKey);
-
-  await instanceDb.identity.put({
-    id: INSTANCE_ID,
-    privateKeyHex,
-    publicKeyHex,
-    createdAt: Date.now(),
-  });
-
-  return { privateKeyHex, publicKeyHex };
+  return {
+    privateKeyHex: WORKSHOP_APP_KEY.privateKeyHex,
+    publicKeyHex: WORKSHOP_APP_KEY.publicKeyHex,
+  };
 }
 
 /**

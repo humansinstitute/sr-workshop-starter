@@ -63,7 +63,7 @@
             @click="$store.app.showLoginQr()"
           >Show Login QR</button>
           <button type="button" @click="$store.app.openSuperBasedSettings()">SuperBased Sync</button>
-          <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.openDelegationsModal()">Delegations</button>
+          <!-- Hidden for workshop: <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.openDelegationsModal()">Delegations</button> -->
           <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.showAgentConnect()">Agent Connect</button>
           <button type="button" @click="$store.app.logout()">Log out</button>
         </div>
