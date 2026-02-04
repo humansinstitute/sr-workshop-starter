@@ -24,29 +24,6 @@ module.exports = {
       "autorestart": false,
       "max_restarts": 0,
       "min_uptime": "5s"
-    },
-    {
-      "name": "honest-ivory-thicket-app-workshoptree",
-      "namespace": "wingman-apps",
-      "script": "bash",
-      "args": [
-        "-c",
-        "PORT=41002 bunx vite --host"
-      ],
-      "cwd": "/Users/mini/code/superbased/todo-flux/.worktrees/workshop",
-      "env": {
-        "APP_ID": "4a1843b5-12f3-4608-919c-6ef2c3dc5ffb",
-        "APP_LABEL": "WorkshopTree",
-        "USER_ALIAS": "honest-ivory-thicket",
-        "PORT": "41002"
-      },
-      "out_file": "/Users/mini/code/superbased/todo-flux/.worktrees/workshop/apps/logs/honest-ivory-thicket-app-workshoptree-out.log",
-      "error_file": "/Users/mini/code/superbased/todo-flux/.worktrees/workshop/apps/logs/honest-ivory-thicket-app-workshoptree-error.log",
-      "log_date_format": "YYYY-MM-DD HH:mm:ss",
-      "merge_logs": true,
-      "autorestart": false,
-      "max_restarts": 0,
-      "min_uptime": "5s"
     }
   ]
 };

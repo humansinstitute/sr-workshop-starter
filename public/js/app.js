@@ -285,16 +285,60 @@ Alpine.store('app', {
   },
 
   async logout() {
-    // Stop background sync if running
-    this.stopBackgroundSync();
+    // Stop auto-sync if running
+    this.stopAutoSync();
 
+    // Clean up notifiers
+    if (this.syncNotifier) {
+      this.syncNotifier.destroy();
+      this.syncNotifier = null;
+    }
+    if (this.delegationNotifier) {
+      this.delegationNotifier.destroy();
+      this.delegationNotifier = null;
+    }
+
+    // Clear all local data
+    try {
+      // Clear IndexedDB
+      const { db } = await import('./db.js');
+      await db.todos.clear();
+      console.log('Cleared IndexedDB todos');
+
+      // Clear all localStorage
+      localStorage.clear();
+      console.log('Cleared localStorage');
+
+      // Clear service worker caches
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+        console.log('Cleared service worker caches');
+      }
+
+      // Unregister service worker
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map(reg => reg.unregister()));
+        console.log('Unregistered service workers');
+      }
+    } catch (err) {
+      console.error('Error clearing data:', err);
+    }
+
+    // Reset app state
     this.session = null;
     this.profile = null;
     this.todos = [];
     this.filterTags = [];
     this.showAvatarMenu = false;
+    this.superbasedClient = null;
+    this.superbasedConnected = false;
     await clearAutoLogin();
     clearMemoryCredentials();
+
+    // Reload page for clean state
+    window.location.reload();
   },
 
   async loadProfile(pubkeyHex) {
