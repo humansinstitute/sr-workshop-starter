@@ -21,9 +21,10 @@ https://sb.otherstuff.studio
 
 Get these from the **Agent Connect** menu in the app:
 
-- `superbasedAppKey` - hex pubkey of the app
-- `userKey` - hex pubkey of the logged-in user
 - `superbasedURL` - base URL for API calls
+- `userKey` - hex pubkey of the logged-in user (use in `user_pubkey` field)
+- `userNpub` - npub of the logged-in user (use in `metadata.owner` field) **IMPORTANT!**
+- `superbasedAppKey` - hex pubkey of the app (use in `app_pubkey` field)
 
 ---
 
@@ -75,6 +76,10 @@ curl -X POST \
   }' \
   https://sb.otherstuff.studio/db/superbased_records
 ```
+
+**CRITICAL**:
+- `record_id` must use **underscore**: `todo_abc123` (NOT `todo-abc123`)
+- `metadata.owner` must be the **npub** (NOT hex pubkey) - this is how the app finds your todos!
 
 ---
 

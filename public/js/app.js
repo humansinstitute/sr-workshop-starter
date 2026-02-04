@@ -641,6 +641,7 @@ Alpine.store('app', {
     const config = {
       superbasedURL: this.superbasedClient?.config?.httpUrl || '',
       userKey: this.session?.pubkey || '',
+      userNpub: this.session?.npub || '',
       superbasedAppKey: '',
     };
 
