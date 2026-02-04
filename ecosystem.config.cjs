@@ -47,6 +47,29 @@ module.exports = {
       "autorestart": false,
       "max_restarts": 0,
       "min_uptime": "5s"
+    },
+    {
+      "name": "honest-ivory-thicket-app-starter-workshop",
+      "namespace": "wingman-apps",
+      "script": "bash",
+      "args": [
+        "-c",
+        "PORT=41000 bunx vite --host"
+      ],
+      "cwd": "/Users/mini/code/sr-workshop-starter",
+      "env": {
+        "APP_ID": "ce9e3ad9-0579-4927-970d-fc63959ecdce",
+        "APP_LABEL": "Starter Workshop",
+        "USER_ALIAS": "honest-ivory-thicket",
+        "PORT": "41000"
+      },
+      "out_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-starter-workshop-out.log",
+      "error_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-starter-workshop-error.log",
+      "log_date_format": "YYYY-MM-DD HH:mm:ss",
+      "merge_logs": true,
+      "autorestart": false,
+      "max_restarts": 0,
+      "min_uptime": "5s"
     }
   ]
 };

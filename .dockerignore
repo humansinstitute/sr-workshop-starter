@@ -1,4 +1,5 @@
 node_modules
+dist
 .git
 .gitignore
 *.md
@@ -6,3 +7,9 @@ node_modules
 tmp
 .env*
 *.log
+*.tmp
+.idea
+.vscode
+coverage
+tests
+bun.lockb
