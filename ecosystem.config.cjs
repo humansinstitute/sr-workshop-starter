@@ -24,6 +24,29 @@ module.exports = {
       "autorestart": false,
       "max_restarts": 0,
       "min_uptime": "5s"
+    },
+    {
+      "name": "honest-ivory-thicket-app-todo-flux",
+      "namespace": "wingman-apps",
+      "script": "bash",
+      "args": [
+        "-c",
+        "PORT=41001 bunx vite --host"
+      ],
+      "cwd": "/Users/mini/code/superbased/todo-flux",
+      "env": {
+        "APP_ID": "1f51a6a8-b97b-4a74-8b31-818fbdf414c2",
+        "APP_LABEL": "Todo Flux",
+        "USER_ALIAS": "honest-ivory-thicket",
+        "PORT": "41001"
+      },
+      "out_file": "/Users/mini/code/superbased/todo-flux/apps/logs/honest-ivory-thicket-app-todo-flux-out.log",
+      "error_file": "/Users/mini/code/superbased/todo-flux/apps/logs/honest-ivory-thicket-app-todo-flux-error.log",
+      "log_date_format": "YYYY-MM-DD HH:mm:ss",
+      "merge_logs": true,
+      "autorestart": false,
+      "max_restarts": 0,
+      "min_uptime": "5s"
     }
   ]
 };

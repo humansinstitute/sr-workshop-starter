@@ -72,6 +72,25 @@ bun run test -- --reporter=verbose  # Detailed output
 - Call `$store.app` methods for state mutations
 - Login/auth handled via Nostr (ephemeral, extension, bunker, or nsec)
 
+### Live Data Rendering
+
+**IMPORTANT:** All data displayed in todo cards must be live-rendered from the store, not from stale component state.
+
+- **Summary/badges**: Use `todo.*` directly from the x-for loop (e.g., `todo.title`, `todo.state`)
+- **Tags in summary**: Use `$store.app.parseTags(todo.tags)` for live rendering
+- **Edit form inputs**: Use `localTodo.*` for two-way binding during editing
+- **Tag chips in edit form**: Use `tagsArray` (parsed from `localTodo.tags`)
+
+The `todoItem` component has:
+- `localTodo` - local copy for editing (synced from store on init and when `updated_at` changes)
+- `tagsArray` - computed from `localTodo.tags` for edit form display
+
+When adding new fields to todos, ensure:
+1. Field is included in encrypted payload (db.js)
+2. Field is synced to `localTodo` in component init
+3. Summary displays use live `todo.*` from store
+4. Edit form uses `localTodo.*` for binding
+
 ## Guidelines
 
 - Do not start servers yourself; the user manages them outside the agent

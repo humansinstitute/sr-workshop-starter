@@ -181,7 +181,7 @@
                 <span class="badges">
                   <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
                   <span class="badge" :class="`state-${todo.state}`" x-text="$store.app.formatState(todo.state)"></span>
-                  <template x-for="tag in tagsArray" :key="tag">
+                  <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
                     <span class="tag-chip" x-text="tag"></span>
                   </template>
                 </span>
@@ -276,7 +276,7 @@
                   <span class="badges">
                     <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
                     <span class="badge state-done">Done</span>
-                    <template x-for="tag in tagsArray" :key="tag">
+                    <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
                       <span class="tag-chip" x-text="tag"></span>
                     </template>
                   </span>

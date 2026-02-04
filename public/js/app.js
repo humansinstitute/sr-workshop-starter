@@ -362,6 +362,7 @@ Alpine.store('app', {
   formatState: formatStateLabel,
   formatPriority: formatPriorityLabel,
   formatTransition: formatTransitionLabel,
+  parseTags,  // Expose for live template rendering
 
   async copyId() {
     if (!this.session?.npub) return;
@@ -781,8 +782,15 @@ Alpine.data('todoItem', (todo) => ({
 
   // Watch for external changes (sync) and refresh localTodo
   init() {
+    // Initial sync - ensure localTodo has latest from store
+    const initialTodo = this.$store.app.todos.find(t => t.id === todo.id);
+    if (initialTodo) {
+      this.localTodo = { ...initialTodo };
+      this._lastSyncedAt = initialTodo.updated_at;
+    }
+
+    // Watch for store changes
     this.$watch('$store.app.todos', () => {
-      // Find the current version of this todo in the store
       const freshTodo = this.$store.app.todos.find(t => t.id === this.localTodo.id);
       if (freshTodo && freshTodo.updated_at !== this._lastSyncedAt) {
         // External update detected - refresh localTodo
