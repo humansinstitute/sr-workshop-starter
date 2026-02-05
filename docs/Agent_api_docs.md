@@ -55,7 +55,9 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Then filter results where `metadata.assigned_to` equals the target hex pubkey.
 
-### Write/Update a todo
+### Create a new todo (POST)
+
+Use POST to create new records:
 
 ```bash
 curl -X POST \
@@ -77,10 +79,37 @@ curl -X POST \
   https://sb.otherstuff.studio/db/superbased_records
 ```
 
+### Update an existing todo (PATCH)
+
+**IMPORTANT**: Updates require PATCH with a `?record_id=` query parameter filter:
+
+```bash
+curl -X PATCH \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "record_id": "todo_{uuid}",
+    "app_pubkey": "{superbasedAppKey}",
+    "user_pubkey": "{userKey}",
+    "collection": "todos",
+    "encrypted_data": "{...escaped JSON...}",
+    "metadata": {
+      "local_id": "{uuid}",
+      "owner": "{userNpub}",
+      "updated_at": "2024-01-01T00:00:00.000Z",
+      "device_id": "agent"
+    }
+  }' \
+  "https://sb.otherstuff.studio/db/superbased_records?record_id=eq.todo_{uuid}"
+```
+
+**Note**: The `?record_id=eq.{value}` query parameter is required for PATCH - this tells the API which record to update.
+
 **CRITICAL**:
 - `record_id` must use **underscore**: `todo_abc123` (NOT `todo-abc123`)
 - `metadata.owner` must be the **npub** (NOT hex pubkey) - this is how the app finds your todos!
 - `encrypted_data` must be **properly escaped JSON** - see JSON Escaping section below
+- For updates, include **all fields** in `encrypted_data`, not just changed ones
 
 ---
 
@@ -303,36 +332,39 @@ date -u +"%Y-%m-%dT%H:%M:%S.000Z"
 
 ### Mark a todo as in progress
 
-Update the existing record with:
+Use PATCH with `?record_id=eq.todo_{uuid}` and update:
 - `"state": "doing"`
 - `"done": 0`
 - `"updated_at": "{current timestamp}"`
 
 ### Mark a todo as complete
 
-Update the existing record with:
+Use PATCH with `?record_id=eq.todo_{uuid}` and update:
 - `"state": "done"`
 - `"done": 1`
 - `"updated_at": "{current timestamp}"`
 
 ### Add tags to a todo
 
-If current tags are `"work"`, to add `"urgent"`:
+Use PATCH with `?record_id=eq.todo_{uuid}`. If current tags are `"work"`, to add `"urgent"`:
 - `"tags": "work,urgent"`
 - `"updated_at": "{current timestamp}"`
 
 ### Set a due date
 
+Use PATCH with `?record_id=eq.todo_{uuid}` and update:
 - `"scheduled_for": "2024-03-15T09:00:00.000Z"`
 - `"updated_at": "{current timestamp}"`
 
 ### Delete a todo
 
+Use PATCH with `?record_id=eq.todo_{uuid}` and update:
 - `"deleted": 1`
 - `"updated_at": "{current timestamp}"`
 
 ### Assign to another user
 
+Use PATCH with `?record_id=eq.todo_{uuid}` and update:
 - `"assigned_to": "{assignee_hex_pubkey}"`
 - `"updated_at": "{current timestamp}"`
 
@@ -366,3 +398,16 @@ openssl rand -hex 8
 - Set `device_id` to `"agent"` to identify agent-created/modified records
 - The `metadata.updated_at` should match the `updated_at` inside `encrypted_data`
 - Never modify `created_at` after initial creation
+
+---
+
+## Quick Reference: HTTP Methods
+
+| Operation | Method | URL |
+|-----------|--------|-----|
+| Read all | GET | `/db/superbased_records?app_pubkey=...&collection=todos` |
+| Read user's | GET | `/db/superbased_records?app_pubkey=...&collection=todos&user_pubkey=...` |
+| **Create** | **POST** | `/db/superbased_records` |
+| **Update** | **PATCH** | `/db/superbased_records?record_id=eq.todo_{uuid}` |
+
+**Common mistake**: Using POST for updates. Updates MUST use PATCH with the `?record_id=eq.{value}` filter.

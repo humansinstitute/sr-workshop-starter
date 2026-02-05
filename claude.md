@@ -3,6 +3,11 @@
 - My preference is for you to answer quickly. Do the research you need but don't get carried away doing long tasks.
 - If you have multiple steps, ask a question to ensure you keep on track.
 
+## Documentation
+
+- **[UI Changes Guide](docs/ui_changes.md)** - How to modify styles, Alpine.js components, and visual patterns
+- **[Functional Changes Guide](docs/functional_changes.md)** - How data flows, adding fields, making changes that compile
+
 ## Architecture
 
 This is a **local-first, static-only** application. There is no backend server - all data lives in the browser's IndexedDB via Dexie, encrypted with NIP-44.
