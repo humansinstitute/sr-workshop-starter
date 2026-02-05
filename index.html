@@ -59,7 +59,7 @@
           >Export Secret</button>
           <button
             type="button"
-            x-show="$store.app.session?.method === 'ephemeral'"
+            x-show="['ephemeral', 'secret'].includes($store.app.session?.method)"
             @click="$store.app.showLoginQr()"
           >Show Login QR</button>
           <button type="button" @click="$store.app.openSuperBasedSettings()">SuperBased Sync</button>

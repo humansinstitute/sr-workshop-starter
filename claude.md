@@ -105,3 +105,4 @@ When adding new fields to todos, ensure:
 - Commit every change with a clear message so rollbacks stay easy
 - Make a note of current commit before starting and after a change has completed
 - **ALWAYS read type definitions (`.d.ts` files) before using any library, SDK, or API** - never assume function signatures based on naming conventions. Check `node_modules/<package>/dist/*.d.ts` for the actual interface.
+- **Bump service worker version** when making UI or feature changes. Update `CACHE_NAME` in `public/sw.js` (e.g., `v47` → `v48`). This ensures mobile browsers fetch fresh assets instead of serving stale cached versions.

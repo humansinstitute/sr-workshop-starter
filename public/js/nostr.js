@@ -7,6 +7,7 @@ import {
   cacheProfile,
   getCachedProfile,
 } from './secure-store.js';
+import { getOrCreateInstanceKey } from './keyteleport.js';
 
 export const LOGIN_KIND = 27235;
 export const AUTH_KIND = 22242; // NIP-42 AUTH kind
@@ -386,32 +387,97 @@ export async function exportNsec() {
   return nip19.nsecEncode(secret);
 }
 
-// Generate login QR URL
+// Generate login QR URL with encrypted nsec
+// Encrypts the nsec using the app's hardcoded key (same as Key Teleport)
+// so the nsec is never exposed in plaintext in the URL
 export async function generateLoginQrUrl() {
   const nsec = await exportNsec();
   if (!nsec) return null;
-  return `${window.location.origin}/#code=${nsec}`;
+
+  const { nip44 } = await loadNostrLibs();
+  const instanceKey = await getOrCreateInstanceKey();
+
+  // Encrypt nsec to the app's public key using NIP-44
+  // This way the nsec is protected in transit - only this app can decrypt it
+  const conversationKey = nip44.v2.utils.getConversationKey(
+    hexToBytes(instanceKey.privateKeyHex),
+    instanceKey.publicKeyHex
+  );
+  const encryptedNsec = nip44.v2.encrypt(nsec, conversationKey);
+
+  // Use URL-safe base64 encoding
+  const encoded = btoa(encryptedNsec).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  return `${window.location.origin}/#login=${encoded}`;
 }
 
-// Parse fragment login (nsec in URL hash)
+// Parse fragment login (encrypted nsec in URL hash)
+// Supports: #login=<encrypted> (new secure format)
+// Legacy:   #code=<nsec> (deprecated, still supported for backwards compat)
 export async function parseFragmentLogin() {
   const hash = window.location.hash;
-  if (!hash.startsWith('#code=')) return null;
 
-  const nsec = hash.slice(6);
-  if (!nsec || !nsec.startsWith('nsec1')) {
+  // New encrypted format: #login=<encrypted>
+  if (hash.startsWith('#login=')) {
+    const encoded = hash.slice(7); // Remove '#login='
+    if (!encoded) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return null;
+    }
+
+    // Clear URL immediately (don't leave encrypted data in history)
     history.replaceState(null, '', window.location.pathname + window.location.search);
-    return null;
+
+    try {
+      const { nip19, nip44 } = await loadNostrLibs();
+      const instanceKey = await getOrCreateInstanceKey();
+
+      // Decode URL-safe base64
+      const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+      const encryptedNsec = atob(base64);
+
+      // Decrypt using app's key
+      const conversationKey = nip44.v2.utils.getConversationKey(
+        hexToBytes(instanceKey.privateKeyHex),
+        instanceKey.publicKeyHex
+      );
+      const nsec = nip44.v2.decrypt(encryptedNsec, conversationKey);
+
+      if (!nsec || !nsec.startsWith('nsec1')) {
+        console.error('Decrypted value is not a valid nsec');
+        return null;
+      }
+
+      const secretBytes = decodeNsec(nip19, nsec);
+      const secretHex = bytesToHex(secretBytes);
+      localStorage.setItem(STORAGE_KEYS.EPHEMERAL_SECRET, secretHex);
+
+      return 'ephemeral';
+    } catch (err) {
+      console.error('Failed to decrypt login QR:', err);
+      return null;
+    }
   }
 
-  history.replaceState(null, '', window.location.pathname + window.location.search);
+  // Legacy format: #code=<nsec> (deprecated but still supported)
+  if (hash.startsWith('#code=')) {
+    const nsec = hash.slice(6);
+    if (!nsec || !nsec.startsWith('nsec1')) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return null;
+    }
 
-  const { nip19 } = await loadNostrLibs();
-  const secretBytes = decodeNsec(nip19, nsec);
-  const secretHex = bytesToHex(secretBytes);
-  localStorage.setItem(STORAGE_KEYS.EPHEMERAL_SECRET, secretHex);
+    history.replaceState(null, '', window.location.pathname + window.location.search);
 
-  return 'ephemeral';
+    const { nip19 } = await loadNostrLibs();
+    const secretBytes = decodeNsec(nip19, nsec);
+    const secretHex = bytesToHex(secretBytes);
+    localStorage.setItem(STORAGE_KEYS.EPHEMERAL_SECRET, secretHex);
+
+    return 'ephemeral';
+  }
+
+  return null;
 }
 
 // ===========================================

@@ -498,8 +498,12 @@ Alpine.store('app', {
   },
 
   async showLoginQr() {
-    if (this.session?.method !== 'ephemeral') {
-      alert('Login QR is only available for ephemeral accounts.');
+    // Allow QR login for sessions that have access to the decrypted nsec in memory
+    // - ephemeral: generated on sign up
+    // - secret: BYO nsec or Key Teleport (which uses 'secret' internally)
+    const allowedMethods = ['ephemeral', 'secret'];
+    if (!allowedMethods.includes(this.session?.method)) {
+      alert('Login QR is only available for accounts with a local secret key.');
       return;
     }
     this.showAvatarMenu = false;
