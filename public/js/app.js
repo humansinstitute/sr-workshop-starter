@@ -119,6 +119,12 @@ Alpine.store('app', {
   isLoadingDelegations: false,
   delegatedTodos: [],
 
+  // View state
+  currentView: 'list', // 'list' | 'kanban' | 'calendar'
+  calendarYear: new Date().getFullYear(),
+  calendarMonth: new Date().getMonth(),
+  calendarSelectedDate: null,
+
   // New todo input
   newTodoTitle: '',
 
@@ -155,6 +161,67 @@ Alpine.store('app', {
       parseTags(t.tags).forEach(tag => tagSet.add(tag));
     });
     return Array.from(tagSet).sort();
+  },
+
+  get todosByState() {
+    const result = { new: [], ready: [], in_progress: [], done: [] };
+    let todos = this.todos.filter(t => !t.deleted);
+    if (this.filterTags.length > 0) {
+      todos = todos.filter(t => {
+        const todoTags = parseTags(t.tags);
+        return this.filterTags.some(ft => todoTags.includes(ft.toLowerCase()));
+      });
+    }
+    for (const t of todos) {
+      if (result[t.state]) result[t.state].push(t);
+    }
+    return result;
+  },
+
+  get calendarMonthLabel() {
+    const d = new Date(this.calendarYear, this.calendarMonth, 1);
+    return d.toLocaleString('default', { month: 'long', year: 'numeric' });
+  },
+
+  get calendarDays() {
+    const year = this.calendarYear;
+    const month = this.calendarMonth;
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    const cells = [];
+    // Previous month padding
+    for (let i = firstDay - 1; i >= 0; i--) {
+      const day = daysInPrevMonth - i;
+      const d = new Date(year, month - 1, day);
+      cells.push({ date: this._formatDate(d), day, isCurrentMonth: false });
+    }
+    // Current month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(year, month, day);
+      cells.push({ date: this._formatDate(d), day, isCurrentMonth: true });
+    }
+    // Next month padding to fill 6 rows
+    const remaining = 42 - cells.length;
+    for (let day = 1; day <= remaining; day++) {
+      const d = new Date(year, month + 1, day);
+      cells.push({ date: this._formatDate(d), day, isCurrentMonth: false });
+    }
+    return cells;
+  },
+
+  get scheduledTodosByDate() {
+    const map = {};
+    const todos = this.todos.filter(t => !t.deleted && t.scheduled_for);
+    for (const t of todos) {
+      if (!map[t.scheduled_for]) map[t.scheduled_for] = [];
+      map[t.scheduled_for].push(t);
+    }
+    return map;
+  },
+
+  get unscheduledTodos() {
+    return this.todos.filter(t => !t.deleted && !t.scheduled_for && t.state !== 'done');
   },
 
   // Sync status: 'disconnected' | 'syncing' | 'unsynced' | 'synced'
@@ -440,6 +507,64 @@ Alpine.store('app', {
 
   isTagActive(tag) {
     return this.filterTags.includes(tag.toLowerCase());
+  },
+
+  // Calendar methods
+  _formatDate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  },
+
+  todosForDate(dateStr) {
+    return this.scheduledTodosByDate[dateStr] || [];
+  },
+
+  prevMonth() {
+    if (this.calendarMonth === 0) {
+      this.calendarMonth = 11;
+      this.calendarYear--;
+    } else {
+      this.calendarMonth--;
+    }
+  },
+
+  nextMonth() {
+    if (this.calendarMonth === 11) {
+      this.calendarMonth = 0;
+      this.calendarYear++;
+    } else {
+      this.calendarMonth++;
+    }
+  },
+
+  goToToday() {
+    const now = new Date();
+    this.calendarYear = now.getFullYear();
+    this.calendarMonth = now.getMonth();
+    this.calendarSelectedDate = this._formatDate(now);
+  },
+
+  selectDate(dateStr) {
+    this.calendarSelectedDate = this.calendarSelectedDate === dateStr ? null : dateStr;
+  },
+
+  isToday(dateStr) {
+    return dateStr === this._formatDate(new Date());
+  },
+
+  // Drag and drop handlers
+  async handleKanbanDrop(todoId, newState) {
+    const todo = this.todos.find(t => t.id === todoId);
+    if (!todo || todo.state === newState) return;
+    const allowed = ALLOWED_STATE_TRANSITIONS[todo.state] || [];
+    if (!allowed.includes(newState)) return; // silently reject invalid transitions
+    await this.transitionState(todoId, newState);
+  },
+
+  async handleCalendarDrop(todoId, newDate) {
+    await this.updateTodoField(todoId, 'scheduled_for', newDate);
   },
 
   toggleArchive() {
