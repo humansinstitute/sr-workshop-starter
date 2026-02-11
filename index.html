@@ -63,7 +63,7 @@
             @click="$store.app.showLoginQr()"
           >Show Login QR</button>
           <button type="button" @click="$store.app.openSuperBasedSettings()">SuperBased Sync</button>
-          <!-- Hidden for workshop: <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.openDelegationsModal()">Delegations</button> -->
+          <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.openDelegationsModal()">Delegations</button>
           <button type="button" x-show="$store.app.superbasedConnected" @click="$store.app.showAgentConnect()">Agent Connect</button>
           <button type="button" @click="$store.app.logout()">Log out</button>
         </div>
@@ -209,6 +209,11 @@
                     <span class="badges">
                       <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
                       <span class="badge" :class="`state-${todo.state}`" x-text="$store.app.formatState(todo.state)"></span>
+                      <span
+                        class="badge delegate-badge"
+                        x-show="(todo.read_delegates?.length || 0) + (todo.write_delegates?.length || 0) > 0"
+                        x-text="'shared:' + ((todo.read_delegates?.length || 0) + (todo.write_delegates?.length || 0))"
+                      ></span>
                       <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
                         <span class="tag-chip" x-text="tag"></span>
                       </template>
@@ -274,6 +279,45 @@
                         <input type="text" x-model="localTodo.assigned_to" placeholder="npub1... (optional)" />
                         <span class="assigned-to-hint">Delegate must have write permission to update</span>
                       </label>
+
+                      <!-- Per-record delegate management -->
+                      <div class="record-delegates" x-show="$store.app.superbasedConnected">
+                        <label>Record Delegates</label>
+                        <div class="delegate-list-compact">
+                          <template x-for="d in (todo.read_delegates || [])" :key="'r-' + d">
+                            <span class="delegate-chip read">
+                              <span x-text="d.slice(0, 8) + '...'"></span>
+                              <span class="badge-sm">read</span>
+                              <span class="remove-tag" @click="$store.app.removeDelegateFromRecord(todo.id, d)">&times;</span>
+                            </span>
+                          </template>
+                          <template x-for="d in (todo.write_delegates || [])" :key="'w-' + d">
+                            <span class="delegate-chip write" x-show="!(todo.read_delegates || []).includes(d)">
+                              <span x-text="d.slice(0, 8) + '...'"></span>
+                              <span class="badge-sm">write</span>
+                              <span class="remove-tag" @click="$store.app.removeDelegateFromRecord(todo.id, d)">&times;</span>
+                            </span>
+                          </template>
+                          <div class="add-delegate-inline" x-data="{ delegateInput: '', delegatePerm: 'read' }">
+                            <input
+                              type="text"
+                              x-model="delegateInput"
+                              placeholder="hex pubkey..."
+                              class="delegate-input-sm"
+                            />
+                            <select x-model="delegatePerm" class="delegate-perm-select">
+                              <option value="read">Read</option>
+                              <option value="write">Write</option>
+                            </select>
+                            <button
+                              type="button"
+                              class="delegate-add-btn"
+                              @click="if(delegateInput.trim()) { $store.app.addDelegateToRecord(todo.id, delegateInput.trim(), delegatePerm); delegateInput = ''; }"
+                            >Add</button>
+                          </div>
+                        </div>
+                      </div>
+
                       <button type="submit">Update</button>
                     </form>
 

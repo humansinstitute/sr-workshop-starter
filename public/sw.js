@@ -1,4 +1,4 @@
-const CACHE_NAME = 'super-based-todo-v51-workshop';
+const CACHE_NAME = 'super-based-todo-v52-workshop';
 
 const ASSETS_TO_CACHE = [
   '/',

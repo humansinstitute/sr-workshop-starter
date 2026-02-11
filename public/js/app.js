@@ -1,6 +1,6 @@
 // Main Alpine.js application
 import Alpine from 'https://esm.sh/alpinejs@3.14.8';
-import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState } from './db.js';
+import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState, addDelegateToTodo, removeDelegateFromTodo, getTodoDelegates, migrateToV1 } from './db.js';
 import {
   signLoginEvent,
   getPubkeyFromEvent,
@@ -421,6 +421,10 @@ Alpine.store('app', {
 
   async loadTodos() {
     if (!this.session?.npub) return;
+
+    // Lazy v0→v1 migration on first load
+    await migrateToV1(this.session.npub);
+
     this.todos = await getTodosByOwner(this.session.npub);
 
     // Check SuperBased connection after todos are loaded
@@ -1134,14 +1138,57 @@ Alpine.store('app', {
     this.delegationError = null;
 
     try {
+      // Grant delegation on SuperBased server
       await this.superbasedClient.grantDelegation(
         this.newDelegateNpub.trim(),
         permissions
       );
+
+      // Convert npub to hex for per-record delegation
+      const { nip19 } = await loadNostrLibs();
+      let delegateHex = this.newDelegateNpub.trim();
+      if (delegateHex.startsWith('npub1')) {
+        const decoded = nip19.decode(delegateHex);
+        delegateHex = decoded.data;
+      }
+
+      // Add delegate to all current todos
+      const permission = this.delegatePermWrite ? 'write' : 'read';
+      const manifestRecords = [];
+      for (const todo of this.todos) {
+        try {
+          await addDelegateToTodo(todo.id, delegateHex, permission);
+          manifestRecords.push({
+            record_id: todo.id,
+            collection: 'todos',
+            access: permission,
+            delegated_at: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.error(`Failed to add delegate to todo ${todo.id}:`, err);
+        }
+      }
+
+      // Publish delegation manifest to Nostr
+      if (this.delegationNotifier && manifestRecords.length > 0) {
+        const apiBaseUrl = this.superbasedClient?.config?.httpUrl || '';
+        await this.delegationNotifier.publishDelegationManifest(
+          delegateHex,
+          manifestRecords,
+          apiBaseUrl
+        );
+      }
+
       this.newDelegateNpub = '';
       this.delegatePermRead = true;
       this.delegatePermWrite = false;
       await this.loadDelegations();
+      await this.loadTodos();
+
+      // Trigger sync to push updated delegate payloads
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
     } catch (err) {
       console.error('Failed to grant delegation:', err);
       this.delegationError = err.message;
@@ -1156,7 +1203,33 @@ Alpine.store('app', {
       const { nip19 } = await loadNostrLibs();
       const delegateNpub = nip19.npubEncode(delegatePubkey);
       await this.superbasedClient.revokeDelegation(delegateNpub);
+
+      // Remove delegate from all todos
+      for (const todo of this.todos) {
+        try {
+          await removeDelegateFromTodo(todo.id, delegatePubkey);
+        } catch (err) {
+          console.error(`Failed to remove delegate from todo ${todo.id}:`, err);
+        }
+      }
+
+      // Republish empty manifest (revokes all records for this delegate)
+      if (this.delegationNotifier) {
+        const apiBaseUrl = this.superbasedClient?.config?.httpUrl || '';
+        await this.delegationNotifier.publishDelegationManifest(
+          delegatePubkey,
+          [], // Empty records = revoked
+          apiBaseUrl
+        );
+      }
+
       await this.loadDelegations();
+      await this.loadTodos();
+
+      // Trigger sync to push updated records without delegate payloads
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
     } catch (err) {
       console.error('Failed to revoke delegation:', err);
       this.delegationError = err.message;
@@ -1170,6 +1243,48 @@ Alpine.store('app', {
 
   formatPermissions(permissions) {
     return (permissions || []).join(', ');
+  },
+
+  // Per-record delegate management
+  async manageTodoDelegates(todoId) {
+    try {
+      const delegates = await getTodoDelegates(todoId);
+      return delegates;
+    } catch (err) {
+      console.error('Failed to get todo delegates:', err);
+      return { read_delegates: [], write_delegates: [] };
+    }
+  },
+
+  async addDelegateToRecord(todoId, pubkeyHex, permission) {
+    try {
+      await addDelegateToTodo(todoId, pubkeyHex, permission);
+      await this.loadTodos();
+
+      // Trigger sync to push updated delegate payloads
+      this.hasUnsyncedChanges = true;
+      this.lastLocalChangeTime = Date.now();
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
+    } catch (err) {
+      console.error('Failed to add delegate to record:', err);
+    }
+  },
+
+  async removeDelegateFromRecord(todoId, pubkeyHex) {
+    try {
+      await removeDelegateFromTodo(todoId, pubkeyHex);
+      await this.loadTodos();
+
+      this.hasUnsyncedChanges = true;
+      this.lastLocalChangeTime = Date.now();
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
+    } catch (err) {
+      console.error('Failed to remove delegate from record:', err);
+    }
   },
 });
 

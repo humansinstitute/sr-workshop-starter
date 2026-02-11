@@ -464,6 +464,231 @@ describe('SuperBased Sync', () => {
     });
   });
 
+  describe('DER v1 format', () => {
+    it('should serialize and deserialize with delegate fields', async () => {
+      // Create a v1 todo with delegates
+      const todo = {
+        id: 1,
+        owner: testOwner,
+        title: 'DER Test',
+        description: 'Testing DER format',
+        priority: 'rock',
+        state: 'new',
+        created_at: '2024-01-01T10:00:00.000Z',
+        updated_at: '2024-01-01T10:00:00.000Z',
+        read_delegates: ['aabb1122'],
+        write_delegates: ['ccdd3344'],
+        schema_version: 1,
+      };
+
+      // Serialize (simulate what serializeTodo does)
+      const { id, owner, read_delegates, write_delegates, schema_version, ...sensitiveData } = todo;
+      const stored = {
+        id,
+        owner,
+        payload: JSON.stringify(sensitiveData),
+        schema_version,
+        read_delegates,
+        write_delegates,
+      };
+
+      await testDb.todos.put(stored);
+
+      // Verify stored structure
+      const retrieved = await testDb.todos.get(1);
+      expect(retrieved.read_delegates).toEqual(['aabb1122']);
+      expect(retrieved.write_delegates).toEqual(['ccdd3344']);
+      expect(retrieved.schema_version).toBe(1);
+
+      // Verify payload doesn't contain delegate fields
+      const parsedPayload = JSON.parse(retrieved.payload);
+      expect(parsedPayload.read_delegates).toBeUndefined();
+      expect(parsedPayload.write_delegates).toBeUndefined();
+      expect(parsedPayload.schema_version).toBeUndefined();
+      expect(parsedPayload.title).toBe('DER Test');
+    });
+
+    it('v0 records should parse correctly (backward compat)', async () => {
+      // Simulate a v0 record from server (no schema_version, uses encrypted_data)
+      const v0Data = {
+        id: 1,
+        owner: testOwner,
+        payload: 'encrypted:' + btoa(JSON.stringify({ title: 'Legacy todo', state: 'new', updated_at: '2024-01-01T10:00:00.000Z' })),
+      };
+      const v0ServerRecord = {
+        record_id: 'todo_1',
+        collection: 'todos',
+        encrypted_data: JSON.stringify(v0Data),
+        updated_at: '2024-01-01T10:00:00.000Z',
+        metadata: { owner: testOwner, device_id: 'other-device' },
+      };
+
+      // Simulate pull and store
+      const match = v0ServerRecord.record_id.match(/^todo_(\d+)$/);
+      expect(match).toBeTruthy();
+
+      const data = JSON.parse(v0ServerRecord.encrypted_data);
+      await testDb.todos.put({
+        id: data.id,
+        owner: data.owner,
+        payload: data.payload,
+        server_updated_at: v0ServerRecord.updated_at,
+      });
+
+      const stored = await testDb.todos.get(1);
+      expect(stored).toBeTruthy();
+      expect(stored.payload).toBe(v0Data.payload);
+      // v0 records won't have delegate fields
+      expect(stored.read_delegates).toBeUndefined();
+    });
+
+    it('should preserve delegate fields through local update cycle', async () => {
+      // Create a todo with delegates
+      const todo = {
+        id: 1,
+        owner: testOwner,
+        title: 'Delegated task',
+        updated_at: '2024-01-01T10:00:00.000Z',
+        read_delegates: ['delegate1hex'],
+        write_delegates: ['delegate2hex'],
+        schema_version: 1,
+      };
+
+      const { id, owner, read_delegates, write_delegates, schema_version, ...sensitiveData } = todo;
+      const stored = {
+        id,
+        owner,
+        payload: JSON.stringify(sensitiveData),
+        schema_version,
+        read_delegates,
+        write_delegates,
+        server_updated_at: '2024-01-01T10:00:00.000Z',
+      };
+      await testDb.todos.put(stored);
+
+      // Simulate updateTodo preserving delegate fields
+      const existing = await testDb.todos.get(1);
+      const parsedPayload = JSON.parse(existing.payload);
+      const updated = { ...parsedPayload, title: 'Updated title', updated_at: '2024-01-01T11:00:00.000Z' };
+
+      // Re-serialize (delegate fields come from stored record, not payload)
+      await testDb.todos.put({
+        id: existing.id,
+        owner: existing.owner,
+        payload: JSON.stringify(updated),
+        schema_version: existing.schema_version,
+        read_delegates: existing.read_delegates,
+        write_delegates: existing.write_delegates,
+        server_updated_at: existing.server_updated_at,
+      });
+
+      // Verify delegate fields survived the update
+      const afterUpdate = await testDb.todos.get(1);
+      expect(afterUpdate.read_delegates).toEqual(['delegate1hex']);
+      expect(afterUpdate.write_delegates).toEqual(['delegate2hex']);
+      expect(afterUpdate.schema_version).toBe(1);
+      expect(afterUpdate.server_updated_at).toBe('2024-01-01T10:00:00.000Z');
+
+      const afterPayload = JSON.parse(afterUpdate.payload);
+      expect(afterPayload.title).toBe('Updated title');
+    });
+
+    it('should add and remove delegates on a record', async () => {
+      // Create todo without delegates
+      const stored = {
+        id: 1,
+        owner: testOwner,
+        payload: JSON.stringify({ title: 'Test', updated_at: '2024-01-01T10:00:00.000Z' }),
+        schema_version: 1,
+        read_delegates: [],
+        write_delegates: [],
+      };
+      await testDb.todos.put(stored);
+
+      // Add read delegate
+      const record = await testDb.todos.get(1);
+      const readDelegates = [...(record.read_delegates || []), 'newdelegatehex'];
+      await testDb.todos.update(1, { read_delegates: readDelegates });
+
+      let updated = await testDb.todos.get(1);
+      expect(updated.read_delegates).toContain('newdelegatehex');
+      expect(updated.write_delegates).toEqual([]);
+
+      // Add write delegate
+      const writeDelegates = [...(updated.write_delegates || []), 'writerdelegatehex'];
+      const updatedReaders = [...(updated.read_delegates || []), 'writerdelegatehex']; // write implies read
+      await testDb.todos.update(1, { write_delegates: writeDelegates, read_delegates: updatedReaders });
+
+      updated = await testDb.todos.get(1);
+      expect(updated.write_delegates).toContain('writerdelegatehex');
+      expect(updated.read_delegates).toContain('writerdelegatehex');
+
+      // Remove delegate
+      const filteredRead = updated.read_delegates.filter(p => p !== 'newdelegatehex');
+      await testDb.todos.update(1, { read_delegates: filteredRead });
+
+      updated = await testDb.todos.get(1);
+      expect(updated.read_delegates).not.toContain('newdelegatehex');
+      expect(updated.read_delegates).toContain('writerdelegatehex');
+    });
+
+    it('should handle mixed v0/v1 records during sync', async () => {
+      // Local v1 record
+      await testDb.todos.put({
+        id: 1,
+        owner: testOwner,
+        payload: JSON.stringify({ title: 'v1 local', updated_at: '2024-01-01T10:00:00.000Z' }),
+        schema_version: 1,
+        read_delegates: ['delegate1'],
+        write_delegates: [],
+        server_updated_at: '2024-01-01T10:00:00.000Z',
+      });
+
+      // Server has a v0 record (different ID)
+      const v0ServerPayload = encryptTodo({
+        id: 2,
+        owner: testOwner,
+        title: 'v0 from server',
+        updated_at: '2024-01-01T09:00:00.000Z',
+      });
+
+      mockServer.setRecord({
+        record_id: 'todo_2',
+        collection: 'todos',
+        encrypted_data: v0ServerPayload.payload,
+        updated_at: '2024-01-01T09:00:00.000Z',
+        metadata: { local_id: 2, owner: testOwner, device_id: 'other-device' },
+      });
+
+      // Also put local v1 record on server (echo)
+      const v1Encrypted = encryptTodo({
+        id: 1,
+        owner: testOwner,
+        title: 'v1 local',
+        updated_at: '2024-01-01T10:00:00.000Z',
+      });
+      mockServer.setRecord({
+        record_id: 'todo_1',
+        collection: 'todos',
+        encrypted_data: v1Encrypted.payload,
+        updated_at: '2024-01-01T10:00:00.000Z',
+        metadata: { owner: testOwner, device_id: 'test-device-1' },
+      });
+
+      // Sync should handle both
+      const result = await performSync(mockClient, testOwner, testDb);
+
+      expect(result.pulled).toBe(1); // v0 record from server
+
+      // Verify both records exist
+      const record1 = await testDb.todos.get(1);
+      const record2 = await testDb.todos.get(2);
+      expect(record1).toBeTruthy();
+      expect(record2).toBeTruthy();
+      expect(record1.read_delegates).toEqual(['delegate1']); // v1 delegates preserved
+    });
+  });
+
   describe('Conflict scenarios', () => {
     it('should handle rapid edit-sync-edit cycle', async () => {
       const t1 = '2024-01-01T10:00:00.000Z';

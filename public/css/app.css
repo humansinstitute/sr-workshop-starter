@@ -1441,3 +1441,102 @@ summary::-webkit-details-marker {
 li.todo-saved {
   animation: todo-saved-flash 600ms ease-out;
 }
+
+/* DER Delegate UI */
+.delegate-badge {
+  background: #a78bfa !important;
+  color: #fff !important;
+  font-size: 0.65rem;
+}
+
+.record-delegates {
+  margin-top: 0.5rem;
+}
+
+.record-delegates label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+  display: block;
+}
+
+.delegate-list-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.delegate-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-family: monospace;
+}
+
+.delegate-chip.read {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.delegate-chip.write {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.delegate-chip .badge-sm {
+  font-size: 0.6rem;
+  padding: 0 0.2rem;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.1);
+}
+
+.delegate-chip .remove-tag {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.delegate-chip .remove-tag:hover {
+  opacity: 1;
+}
+
+.add-delegate-inline {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-top: 0.25rem;
+  width: 100%;
+}
+
+.delegate-input-sm {
+  flex: 1;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: monospace;
+}
+
+.delegate-perm-select {
+  padding: 0.2rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.delegate-add-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.delegate-add-btn:hover {
+  opacity: 0.9;
+}

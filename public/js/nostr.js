@@ -534,6 +534,32 @@ export async function decryptFromSelf(ciphertext) {
   return nip44.v2.decrypt(ciphertext, conversationKey);
 }
 
+// Decrypt data from a specific sender using NIP-44
+// Used for decrypting delegate_payloads (encrypted by owner to delegate)
+export async function decryptFromSender(ciphertext, senderPubkeyHex) {
+  const { nip44, nip19 } = await loadNostrLibs();
+  const secret = getMemorySecret();
+
+  // Convert npub to hex if needed
+  let pubkeyHex = senderPubkeyHex;
+  if (senderPubkeyHex.startsWith('npub1')) {
+    const decoded = nip19.decode(senderPubkeyHex);
+    pubkeyHex = decoded.data;
+  }
+
+  // For extension users
+  if (!secret) {
+    if (window.nostr?.nip44?.decrypt) {
+      return window.nostr.nip44.decrypt(pubkeyHex, ciphertext);
+    }
+    throw new Error('No decryption key available. Please log in first.');
+  }
+
+  // Use nostr-tools nip44 for ephemeral/secret users
+  const conversationKey = nip44.v2.utils.getConversationKey(secret, pubkeyHex);
+  return nip44.v2.decrypt(ciphertext, conversationKey);
+}
+
 // Encrypt a JSON object
 export async function encryptObject(obj) {
   const plaintext = JSON.stringify(obj);

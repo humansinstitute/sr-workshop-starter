@@ -1,5 +1,6 @@
 // Dexie database for todos (plaintext for workshop)
 import Dexie from 'https://esm.sh/dexie@4.0.10';
+import { encryptToSelf, decryptFromSelf, encryptToRecipient, decryptFromSender, getMemoryPubkey } from './nostr.js';
 
 // Use new database name to avoid primary key migration issues
 // Old 'TodoApp' used auto-increment integers which caused sync collisions
@@ -9,6 +10,20 @@ const db = new Dexie('TodoAppV2');
 db.version(1).stores({
   todos: 'id, owner',
 });
+
+// DER schema version
+export const CURRENT_SCHEMA_VERSION = 1;
+
+// Device ID for tracking sync origin (shared with superbased.js)
+const DEVICE_ID_KEY = 'superbased_device_id';
+function getDeviceId() {
+  let deviceId = localStorage.getItem(DEVICE_ID_KEY);
+  if (!deviceId) {
+    deviceId = crypto.randomUUID();
+    localStorage.setItem(DEVICE_ID_KEY, deviceId);
+  }
+  return deviceId;
+}
 
 // Generate a 16-character hex UUID
 function generateTodoId() {
@@ -40,35 +55,50 @@ function sanitizeJsonString(str) {
 }
 
 // Serialize todo data before storage (plaintext for workshop)
+// Delegate fields and schema_version are stored as top-level Dexie fields (not in payload)
 function serializeTodo(todo) {
-  const { id, owner, ...sensitiveData } = todo;
-  return { id, owner, payload: JSON.stringify(sensitiveData) };
+  const { id, owner, read_delegates, write_delegates, schema_version, ...sensitiveData } = todo;
+  return {
+    id,
+    owner,
+    payload: JSON.stringify(sensitiveData),
+    schema_version: schema_version ?? CURRENT_SCHEMA_VERSION,
+    read_delegates: read_delegates || [],
+    write_delegates: write_delegates || [],
+  };
 }
 
 // Deserialize todo data after retrieval (plaintext for workshop)
+// Includes delegate fields and schema_version from top-level Dexie fields
 function deserializeTodo(storedTodo) {
   if (!storedTodo || !storedTodo.payload) {
     return storedTodo;
   }
 
   let payload = storedTodo.payload;
+  const delegateFields = {
+    read_delegates: storedTodo.read_delegates || [],
+    write_delegates: storedTodo.write_delegates || [],
+    schema_version: storedTodo.schema_version || 0,
+  };
 
   // First try to parse as-is
   try {
     const data = JSON.parse(payload);
-    return { id: storedTodo.id, owner: storedTodo.owner, ...data };
+    return { id: storedTodo.id, owner: storedTodo.owner, ...delegateFields, ...data };
   } catch (firstErr) {
     // Try sanitizing the payload and parsing again
     try {
       const sanitized = sanitizeJsonString(payload);
       const data = JSON.parse(sanitized);
       console.log('Sanitized and parsed todo:', storedTodo.id);
-      return { id: storedTodo.id, owner: storedTodo.owner, ...data };
+      return { id: storedTodo.id, owner: storedTodo.owner, ...delegateFields, ...data };
     } catch (secondErr) {
       console.error('Failed to parse todo even after sanitization:', storedTodo.id, secondErr.message);
       return {
         id: storedTodo.id,
         owner: storedTodo.owner,
+        ...delegateFields,
         title: '[Parse error - invalid JSON]',
         description: '',
         priority: 'sand',
@@ -90,7 +120,7 @@ function deserializeTodos(storedTodos) {
 
 // CRUD operations
 
-export async function createTodo({ title, description = '', priority = 'sand', owner, tags = '', scheduled_for = null, assigned_to = null }) {
+export async function createTodo({ title, description = '', priority = 'sand', owner, tags = '', scheduled_for = null, assigned_to = null, read_delegates = [], write_delegates = [] }) {
   const now = new Date().toISOString();
   const id = generateTodoId(); // Use UUID instead of auto-increment
 
@@ -108,6 +138,9 @@ export async function createTodo({ title, description = '', priority = 'sand', o
     done: 0,
     created_at: now,
     updated_at: now,
+    read_delegates,
+    write_delegates,
+    schema_version: CURRENT_SCHEMA_VERSION,
   };
 
   const serializedTodo = serializeTodo(todoData);
@@ -400,6 +433,246 @@ export function getLastSyncTime(owner) {
 export function setLastSyncTime(owner, timestamp) {
   const key = `superbased_last_sync_${owner}`;
   localStorage.setItem(key, timestamp);
+}
+
+// ===========================================
+// DER (Delegated Encrypted Records) v1 Format
+// ===========================================
+
+/**
+ * Format local todos into DER v1 wire format for SuperBased sync.
+ * Encrypts payload to owner (NIP-44) and to each delegate.
+ * @param {Array} storedTodos - Raw Dexie records (with payload as plaintext JSON)
+ * @returns {Array} v1 wire format records ready for SuperBased
+ */
+export async function formatTodosForDER(storedTodos) {
+  const deviceId = getDeviceId();
+  const results = [];
+
+  for (const todo of storedTodos) {
+    // Parse payload to get updated_at for metadata
+    let payloadData = {};
+    try {
+      payloadData = JSON.parse(todo.payload);
+    } catch { /* ignore */ }
+
+    // Encrypt payload to owner (self) using NIP-44
+    const encrypted_payload = await encryptToSelf(todo.payload);
+
+    // Encrypt to each delegate
+    const delegate_payloads = {};
+    const allDelegates = new Set([
+      ...(todo.read_delegates || []),
+      ...(todo.write_delegates || []),
+    ]);
+
+    for (const delegatePubkey of allDelegates) {
+      try {
+        delegate_payloads[delegatePubkey] = await encryptToRecipient(todo.payload, delegatePubkey);
+      } catch (err) {
+        console.error(`DER: Failed to encrypt to delegate ${delegatePubkey.slice(0, 8)}:`, err.message);
+      }
+    }
+
+    const record = {
+      record_id: `todo_${todo.id}`,
+      collection: 'todos',
+      encrypted_payload,
+      metadata: {
+        local_id: todo.id,
+        owner: todo.owner,
+        read_delegates: todo.read_delegates || [],
+        write_delegates: todo.write_delegates || [],
+        updated_at: payloadData.updated_at || payloadData.created_at || new Date().toISOString(),
+        device_id: deviceId,
+        schema_version: CURRENT_SCHEMA_VERSION,
+      },
+    };
+
+    if (Object.keys(delegate_payloads).length > 0) {
+      record.delegate_payloads = delegate_payloads;
+    }
+
+    results.push(record);
+  }
+
+  return results;
+}
+
+/**
+ * Parse a SuperBased record back to local format.
+ * Handles both v0 (legacy) and v1 (DER) formats.
+ * For v1: decrypts encrypted_payload (owner) or delegate_payloads (delegate).
+ * For v0: parses encrypted_data as JSON (no NIP-44).
+ * @returns {Object|null} { id, owner, payload, record_id, updated_at, read_delegates, write_delegates, schema_version, device_id }
+ */
+export async function parseDERRecord(record) {
+  const schemaVersion = record.metadata?.schema_version || 0;
+
+  if (schemaVersion >= 1 && record.encrypted_payload) {
+    // v1 DER format — decrypt
+    try {
+      const myPubkey = getMemoryPubkey();
+      let decryptedPayload;
+
+      // Try decrypt as owner first
+      try {
+        decryptedPayload = await decryptFromSelf(record.encrypted_payload);
+      } catch (ownerErr) {
+        // Not the owner — try as delegate
+        if (myPubkey && record.delegate_payloads?.[myPubkey]) {
+          // Need owner pubkey to derive conversation key
+          const ownerPubkey = record.metadata?.owner;
+          if (!ownerPubkey) throw new Error('No owner pubkey in metadata');
+          decryptedPayload = await decryptFromSender(
+            record.delegate_payloads[myPubkey],
+            ownerPubkey
+          );
+        } else {
+          throw new Error('Cannot decrypt: not owner or delegate');
+        }
+      }
+
+      return {
+        id: record.metadata?.local_id || extractIdFromRecordId(record.record_id),
+        owner: record.metadata?.owner,
+        payload: decryptedPayload,
+        record_id: record.record_id,
+        updated_at: record.updated_at,
+        read_delegates: record.metadata?.read_delegates || [],
+        write_delegates: record.metadata?.write_delegates || [],
+        schema_version: schemaVersion,
+        device_id: record.metadata?.device_id,
+      };
+    } catch (err) {
+      console.error('Failed to parse DER v1 record:', record.record_id, err.message);
+      return null;
+    }
+  }
+
+  // v0 fallback — legacy format (no encryption, JSON in encrypted_data)
+  return parseRemoteRecordV0(record);
+}
+
+/**
+ * Extract todo ID from record_id format "todo_<id>"
+ */
+function extractIdFromRecordId(recordId) {
+  const match = recordId?.match(/^todo_([a-f0-9]+)$/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * v0 legacy record parser (no NIP-44, just JSON)
+ * Returns same shape as parseDERRecord for consistency
+ */
+function parseRemoteRecordV0(record) {
+  try {
+    const data = JSON.parse(record.encrypted_data);
+    return {
+      id: data.id,
+      owner: data.owner,
+      payload: data.payload,
+      record_id: record.record_id,
+      updated_at: record.updated_at,
+      read_delegates: [],
+      write_delegates: [],
+      schema_version: 0,
+      device_id: record.metadata?.device_id,
+    };
+  } catch (err) {
+    console.error('Failed to parse v0 record:', record.record_id, err.message);
+    return null;
+  }
+}
+
+// ===========================================
+// Per-Record Delegate Management
+// ===========================================
+
+/**
+ * Add a delegate to a todo record
+ * @param {string} id - Todo ID
+ * @param {string} pubkeyHex - Delegate's hex pubkey
+ * @param {string} permission - 'read' or 'write'
+ */
+export async function addDelegateToTodo(id, pubkeyHex, permission = 'read') {
+  const storedTodo = await db.todos.get(id);
+  if (!storedTodo) throw new Error('Todo not found');
+
+  const readDelegates = storedTodo.read_delegates || [];
+  const writeDelegates = storedTodo.write_delegates || [];
+
+  if (permission === 'write') {
+    if (!writeDelegates.includes(pubkeyHex)) {
+      writeDelegates.push(pubkeyHex);
+    }
+    // Write implies read — add to read_delegates too
+    if (!readDelegates.includes(pubkeyHex)) {
+      readDelegates.push(pubkeyHex);
+    }
+  } else {
+    if (!readDelegates.includes(pubkeyHex)) {
+      readDelegates.push(pubkeyHex);
+    }
+  }
+
+  // Update via updateTodo to bump updated_at
+  return updateTodo(id, { read_delegates: readDelegates, write_delegates: writeDelegates });
+}
+
+/**
+ * Remove a delegate from a todo record (both read and write)
+ * @param {string} id - Todo ID
+ * @param {string} pubkeyHex - Delegate's hex pubkey
+ */
+export async function removeDelegateFromTodo(id, pubkeyHex) {
+  const storedTodo = await db.todos.get(id);
+  if (!storedTodo) throw new Error('Todo not found');
+
+  const readDelegates = (storedTodo.read_delegates || []).filter(p => p !== pubkeyHex);
+  const writeDelegates = (storedTodo.write_delegates || []).filter(p => p !== pubkeyHex);
+
+  return updateTodo(id, { read_delegates: readDelegates, write_delegates: writeDelegates });
+}
+
+/**
+ * Get delegates for a todo record
+ * @param {string} id - Todo ID
+ * @returns {{ read_delegates: string[], write_delegates: string[] }}
+ */
+export async function getTodoDelegates(id) {
+  const storedTodo = await db.todos.get(id);
+  if (!storedTodo) throw new Error('Todo not found');
+  return {
+    read_delegates: storedTodo.read_delegates || [],
+    write_delegates: storedTodo.write_delegates || [],
+  };
+}
+
+/**
+ * Lazy migration: tag v0 records with v1 schema and empty delegate arrays.
+ * Called on first loadTodos after login.
+ */
+export async function migrateToV1(owner) {
+  const storedTodos = await db.todos.where('owner').equals(owner).toArray();
+  let migrated = 0;
+
+  for (const todo of storedTodos) {
+    if (todo.schema_version === undefined || todo.schema_version === null || todo.schema_version < 1) {
+      await db.todos.update(todo.id, {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        read_delegates: todo.read_delegates || [],
+        write_delegates: todo.write_delegates || [],
+      });
+      migrated++;
+    }
+  }
+
+  if (migrated > 0) {
+    console.log(`DER: Migrated ${migrated} v0 records to v1 schema`);
+  }
+  return migrated;
 }
 
 // Export db for direct access if needed
