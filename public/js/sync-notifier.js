@@ -316,7 +316,9 @@ export class DelegationNotifier {
 
       const results = await Promise.allSettled(
         DELEGATION_RELAYS.map(relay =>
-          this.relayPool.publish([relay], signedEvent)
+          this.relayPool.publish([relay], signedEvent).catch(() => {
+            // Relay may block kind 30078 — swallow per-relay errors
+          })
         )
       );
 
@@ -413,7 +415,9 @@ export class DelegationNotifier {
 
       const results = await Promise.allSettled(
         DELEGATION_RELAYS.map(relay =>
-          this.relayPool.publish([relay], signedEvent)
+          this.relayPool.publish([relay], signedEvent).catch(() => {
+            // Relay may block kind 30078 — swallow per-relay errors
+          })
         )
       );
 

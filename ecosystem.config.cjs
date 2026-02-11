@@ -49,22 +49,16 @@ module.exports = {
       "min_uptime": "5s"
     },
     {
-      "name": "honest-ivory-thicket-app-starter-workshop",
+      "name": "honest-ivory-thicket-app-sb-todo-updates",
       "namespace": "wingman-apps",
       "script": "bash",
       "args": [
         "-c",
-        "PORT=41000 bunx vite --host"
+        "set -a; [ -f .env ] && . ./.env; set +a; APP_ID='040da29c-efe0-41ba-a702-3a4181a3bb5b' APP_LABEL='SB Todo Updates' USER_ALIAS='honest-ivory-thicket' PORT=41002 bunx vite --host"
       ],
       "cwd": "/Users/mini/code/sr-workshop-starter",
-      "env": {
-        "APP_ID": "ce9e3ad9-0579-4927-970d-fc63959ecdce",
-        "APP_LABEL": "Starter Workshop",
-        "USER_ALIAS": "honest-ivory-thicket",
-        "PORT": "41000"
-      },
-      "out_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-starter-workshop-out.log",
-      "error_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-starter-workshop-error.log",
+      "out_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-sb-todo-updates-out.log",
+      "error_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-sb-todo-updates-error.log",
       "log_date_format": "YYYY-MM-DD HH:mm:ss",
       "merge_logs": true,
       "autorestart": false,

@@ -448,12 +448,17 @@ Alpine.store('app', {
   async addTodo() {
     if (!this.newTodoTitle.trim() || !this.session?.npub) return;
 
-    // Collect current app-wide delegates from existing todos
+    // Derive delegates from server delegation list (source of truth)
     const readDelegates = new Set();
     const writeDelegates = new Set();
-    for (const todo of this.todos) {
-      for (const d of (todo.read_delegates || [])) readDelegates.add(d);
-      for (const d of (todo.write_delegates || [])) writeDelegates.add(d);
+    for (const d of this.delegations) {
+      if (d.delegate_pubkey) {
+        if (d.permissions?.includes('read')) readDelegates.add(d.delegate_pubkey);
+        if (d.permissions?.includes('write')) {
+          writeDelegates.add(d.delegate_pubkey);
+          readDelegates.add(d.delegate_pubkey); // write implies read
+        }
+      }
     }
 
     await createTodo({
@@ -794,22 +799,12 @@ Alpine.store('app', {
 
     // Build the config JSON
     const config = {
+      agentConnectGuide: `${window.location.origin}/agentconnect.md`,
       superbasedURL: this.superbasedClient?.config?.httpUrl || '',
-      userKey: this.session?.pubkey || '',
-      userNpub: this.session?.npub || '',
-      superbasedAppKey: '',
+      appNpub: this.superbasedClient?.config?.appNpub || '',
+      ownerPubkey: this.session?.pubkey || '',
+      ownerNpub: this.session?.npub || '',
     };
-
-    // Convert app npub to hex
-    if (this.superbasedClient?.config?.appNpub) {
-      try {
-        const { nip19 } = await loadNostrLibs();
-        const decoded = nip19.decode(this.superbasedClient.config.appNpub);
-        config.superbasedAppKey = decoded.data;
-      } catch (err) {
-        console.error('Failed to decode app npub:', err);
-      }
-    }
 
     this.agentConnectJson = JSON.stringify(config, null, 2);
     this.showAgentConnectModal = true;
@@ -827,8 +822,8 @@ Alpine.store('app', {
     }
   },
 
-  // Hardcoded OtherStuff Superbased token for workshop (StarterTodoApp)
-  OTHERSTUFF_TOKEN: 'eyJraW5kIjozMDA3OCwiY3JlYXRlZF9hdCI6MTc3MDIwNTM4NCwidGFncyI6W1siZCIsInN1cGVyYmFzZWQtdG9rZW4iXSxbImFwcCIsIm5wdWIxcXphc3BscnQzeGU1dWp2Znlnem03cG5uZmM1em5lZHdtanh2cGt2cXRjYzZoNTU3M2t3cTU0cHB3bSJdLFsic2VydmVyIiwibnB1YjE0Z2s1MHdwd3BldGE4ZmZrNmY0NnhsdDV5NHlwdXNwd3RlMjBlazR0OXltMzl1djh0dGRzNHVuNm11Il0sWyJyZWxheSIsIndzczovL3JlbGF5LmRhbXVzLmlvIl0sWyJhdHRlc3RhdGlvbiIsImV5SnJhVzVrSWpvek1EQTNPU3dpWTNKbFlYUmxaRjloZENJNk1UYzNNREl3TlRJMk9Dd2lkR0ZuY3lJNlcxc2laQ0lzSW5OMWNHVnlZbUZ6WldRdGNtVm5hWE4wY21GMGFXOXVJbDBzV3lKelpYSjJaWElpTENKdWNIVmlNVFJuYXpVd2QzQjNjR1YwWVRobVptczJaalEyZUd4ME5YazBlWEIxYzNCM2RHVXlNR1ZyTkhRNWVXMHpPWFYyT0hSMFpITTBkVzQyYlhVaVhTeGJJbTVoYldVaUxDSlRkR0Z5ZEdWeVZHOWtiMEZ3Y0NKZFhTd2lZMjl1ZEdWdWRDSTZJaUlzSW5CMVltdGxlU0k2SWpBd1ltSXdNR1pqTm1JNE9XSXpOR1UwT1RnNU1qSXdOV0ptTURZM016UmxNamd5T1dVMVlXVmtZemhqWXpCa09UZ3dOV1V6TVdGaVpESTVaVGhrT1dNaUxDSnBaQ0k2SWpBMU5EazRNamhoT0RBNVlUQm1PRGd5TWpOaE16STJOMlZpWWpKaU1qSXlPV000WVROaU1XTmhOak0wTWpVeE5XSTBZamN6T1RRd04yVXpaVE15T1dRaUxDSnphV2NpT2lJM05tWmlabU13WWpBMU56Sm1OMkkyWVRReFpXTmhNVGcxTlRSa1pqQXdaRFk0T1RsaFlUSmhOVEU0WmpCbVpURmhabVF3TWpRMk4yVTVaakl6T1dZME5EQmhNVEE1WXpZeE16TTJZbVZrWXpnd1kyRTRPR1JrTkdRMVpqQmxZMkl6WkdRd1l6bGtNVEkxTW1WbVlUWTRZVFJpTldFM05qZzNNbVUyWVRJd1lTSjkiXSxbImh0dHAiLCJodHRwczovL3NiLm90aGVyc3R1ZmYuc3R1ZGlvIl1dLCJjb250ZW50IjoiIiwicHVia2V5IjoiYWEyZDQ3YjgyZTBlNTdkM2E1MzZkMjZiYTM3ZDc0MjU0ODFlNDAyZTVlNTRmY2RhYWIyOTM3MTJmMTg3NWFkYiIsImlkIjoiNzUyODIyMTRlNWFhYWJjNTBmNDc2MjdhYTRkOGQxN2I2YzQ4MTFkMWQ1OGUyYzhmYTI0OWVkY2JkNzQwYmUxNyIsInNpZyI6IjU2ODcwMmMxMjkzM2NmMzYyYTE5NjNhYjUxMzdhOTEzN2VmZDBlODM1YzM0Njk2MWZmM2RiNWIwYTdmYjY5YmZlODI5MWE0MTFiMzVjNzZiNzQ4NTgxYmE2NTRlZjFlNWFhMzk2NDlhZGIxNmE1MWRhZWMxNDEzMjFlYTlkZDFmIn0=',
+  // Hardcoded OtherStuff Superbased token for workshop (superbased-sync)
+  OTHERSTUFF_TOKEN: 'eyJraW5kIjozMDA3OCwiY3JlYXRlZF9hdCI6MTc3MDgwMDAyMiwidGFncyI6W1siZCIsInN1cGVyYmFzZWQtdG9rZW4iXSxbImFwcCIsIm5wdWIxNTh6M3FyMzh5dmR2bTd3eGR3dWc3bDlnNDc5NmpjcHVma3c0bnF1MnNlZmdqMDhrdjMzczJ3YXgzNSJdLFsic2VydmVyIiwibnB1YjE0Z2s1MHdwd3BldGE4ZmZrNmY0NnhsdDV5NHlwdXNwd3RlMjBlazR0OXltMzl1djh0dGRzNHVuNm11Il0sWyJyZWxheSIsImN2bS5vdGhlcnN0dWZmLmFpIl0sWyJhdHRlc3RhdGlvbiIsImV5SnJhVzVrSWpvek1EQTNPU3dpWTNKbFlYUmxaRjloZENJNk1UYzNNRGd3TURBd01pd2lkR0ZuY3lJNlcxc2laQ0lzSW5OMWNHVnlZbUZ6WldRdGNtVm5hWE4wY21GMGFXOXVJbDBzV3lKelpYSjJaWElpTENKdWNIVmlNVFJuYXpVd2QzQjNjR1YwWVRobVptczJaalEyZUd4ME5YazBlWEIxYzNCM2RHVXlNR1ZyTkhRNWVXMHpPWFYyT0hSMFpITTBkVzQyYlhVaVhTeGJJbTVoYldVaUxDSnpkWEJpWVhObFpDMXplVzVqSWwxZExDSmpiMjUwWlc1MElqb2lJaXdpY0hWaWEyVjVJam9pWVRGak5URXdNR1V5TnpJek1XRmpaR1k1WXpZMlltSTRPR1kzWTJFNFlXWTRZbUU1TmpBell6UmtPV1ExT1Rnek9HRTROalV5T0RrelkyWTJOalEyTXlJc0ltbGtJam9pWTJRd01tWm1ZamRtTTJNeE5qZzBPVGc1WVRZeE9UQTJZamd4TmpjM09URmtNalZrWm1Vd05HUXhObVkwTUdGbU4ySTNOVGszTVdZNVltRTNNVEE0WkNJc0luTnBaeUk2SW1VM09UZG1NbVkzWkRFeU5UZzJZelF4T1RneE5qZ3hOREppTmpnNE1XRXpaalV4WkRJd05UZ3dNelZpWXpkaU9UVXhZV1F4WkRabU5HWTBOelUxTVRoa1ptWTFZakJrWXprek9EQmxNREEzTmpFeU1HSmtaR1F5TVRsbE1qQTRNekE0TkRJellqVTNaalprWVRKak4yTTFPRGc1TmpRNU5qTXpNekk1TlRKa0luMD0iXSxbImh0dHAiLCJodHRwczovL3NiLm90aGVyc3R1ZmYuc3R1ZGlvIl1dLCJjb250ZW50IjoiIiwicHVia2V5IjoiYWEyZDQ3YjgyZTBlNTdkM2E1MzZkMjZiYTM3ZDc0MjU0ODFlNDAyZTVlNTRmY2RhYWIyOTM3MTJmMTg3NWFkYiIsImlkIjoiMGMxZWY5ZTAxYTdhOWFkYzU5OTIzMDNkMWI5ZWRkY2E3NDVmYzc4ZWY5NzhhNDdhYjZhNjJiN2U1Nzc4NmNhOCIsInNpZyI6IjBhMWQ3MDQ5YWE3NWI1NDJmNjdmZTdjYjBhNGRlY2YzMjM0MTQ3M2U2YjEwYzE0YjBlMTgzMTZhN2M1YjhkMzIwNDg0MjY1ZDlkNDg3NTBlNDNjYjRmYWRlYTMwMjViZjM5YzVkYWZkZTNmNDhhY2U4NzdlMDIzODZlNDc4YzNlIn0=',
 
   async connectWithOtherStuff() {
     this.superbasedTokenInput = this.OTHERSTUFF_TOKEN;
@@ -896,6 +891,11 @@ Alpine.store('app', {
       await client.whoami();
       this.superbasedClient = client;
       console.log('SuperBased: Client initialized');
+
+      // Load delegations so addTodo() can derive delegates (don't block)
+      this.loadDelegations().catch(err => {
+        console.error('SuperBased: Failed to load delegations on init:', err);
+      });
 
       // Initialize SyncNotifier in background (don't block connection)
       const config = parseToken(token);
@@ -1138,6 +1138,29 @@ Alpine.store('app', {
       for (const d of this.delegations) {
         if (d.delegate_pubkey) {
           this.resolveDelegateProfile(d.delegate_pubkey);
+        }
+      }
+
+      // Reconcile: ensure all local Dexie records have current app-wide delegates
+      if (this.delegations.length > 0 && this.todos.length > 0) {
+        let reconciled = 0;
+        for (const todo of this.todos) {
+          for (const d of this.delegations) {
+            if (!d.delegate_pubkey) continue;
+            const hasWrite = d.permissions?.includes('write');
+            const needsAdd =
+              (hasWrite && !(todo.write_delegates || []).includes(d.delegate_pubkey)) ||
+              (!hasWrite && !(todo.read_delegates || []).includes(d.delegate_pubkey));
+            if (needsAdd) {
+              const perm = hasWrite ? 'write' : 'read';
+              await addDelegateToTodo(todo.id, d.delegate_pubkey, perm);
+              reconciled++;
+            }
+          }
+        }
+        if (reconciled > 0) {
+          console.log(`Delegations: Reconciled ${reconciled} missing delegate entries on local records`);
+          await this.loadTodos();
         }
       }
     } catch (err) {

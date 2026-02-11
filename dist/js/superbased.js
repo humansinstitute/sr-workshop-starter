@@ -1,8 +1,22 @@
 // SuperBased Sync Client
 // Handles authenticated sync with flux_adaptor server
 
-import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes, decryptObject } from './nostr.js';
-import { getEncryptedTodosByOwner, importEncryptedTodos, db } from './db.js';
+import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes } from './nostr.js';
+import { getEncryptedTodosByOwner, importEncryptedTodos, db, formatTodosForDER, parseDERRecord, CURRENT_SCHEMA_VERSION } from './db.js';
+
+/**
+ * Sanitize JSON string by escaping control characters
+ * Fixes common issues from improperly escaped agent-written data
+ */
+function sanitizePayload(str) {
+  if (!str || typeof str !== 'string') return str;
+  return str
+    .replace(/\r\n/g, '\\n')
+    .replace(/\r/g, '\\n')
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+}
 
 // Device ID for tracking sync origin
 const DEVICE_ID_KEY = 'superbased_device_id';
@@ -225,66 +239,88 @@ export class SuperBasedClient {
 
     return this.request(path, 'GET');
   }
-}
 
-/**
- * Convert local todos to sync format
- * Each todo becomes a record with encrypted_data being the payload
- * Includes updated_at and device_id in metadata for conflict resolution
- */
-export async function todosToSyncRecords(ownerNpub) {
-  // Get raw encrypted todos from DB
-  const encryptedTodos = await getEncryptedTodosByOwner(ownerNpub);
-  const deviceId = getDeviceId();
-
-  // Decrypt each to get updated_at for metadata
-  const records = [];
-  for (const todo of encryptedTodos) {
-    let updatedAt = null;
-    try {
-      const decrypted = await decryptObject(todo.payload);
-      updatedAt = decrypted.updated_at || decrypted.created_at || new Date().toISOString();
-    } catch {
-      updatedAt = new Date().toISOString();
-    }
-
-    records.push({
-      record_id: `todo_${todo.id}`,
-      collection: 'todos',
-      encrypted_data: todo.payload,
-      metadata: {
-        local_id: todo.id,
-        owner: todo.owner,
-        updated_at: updatedAt,
-        device_id: deviceId,
-      },
+  /**
+   * Grant delegation to another npub
+   */
+  async grantDelegation(delegateNpub, permissions) {
+    return this.request(`/apps/${this.config.appNpub}/delegate`, 'POST', {
+      delegate_npub: delegateNpub,
+      permissions: permissions,
     });
   }
 
-  return records;
+  /**
+   * List delegations granted by the current user
+   */
+  async listDelegations() {
+    return this.request(`/apps/${this.config.appNpub}/delegations`, 'GET');
+  }
+
+  /**
+   * Revoke a delegation
+   */
+  async revokeDelegation(delegateNpub) {
+    return this.request(`/apps/${this.config.appNpub}/delegate/${delegateNpub}`, 'DELETE');
+  }
+
+  /**
+   * Fetch records delegated to the current user
+   */
+  async fetchDelegatedRecords(options = {}) {
+    const params = new URLSearchParams();
+    params.set('delegate', 'true');
+    if (options.collection) params.set('collection', options.collection);
+    if (options.since) params.set('since', options.since);
+
+    const queryString = params.toString();
+    const path = `/records/${this.config.appNpub}/fetch?${queryString}`;
+
+    return this.request(path, 'GET');
+  }
+}
+
+/**
+ * Convert local todos to DER v1 sync format
+ * Encrypts payload with NIP-44 to owner + delegates
+ */
+export async function todosToSyncRecords(ownerNpub) {
+  const storedTodos = await getEncryptedTodosByOwner(ownerNpub);
+  return formatTodosForDER(storedTodos);
 }
 
 /**
  * Convert sync records back to local todo format
+ * Handles both v0 (encrypted_data) and v1 (encrypted_payload) formats
+ * v1 records are decrypted via parseDERRecord
  */
-export function syncRecordsToTodos(records) {
-  return records.map(record => ({
-    id: record.metadata?.local_id,
-    owner: record.metadata?.owner,
-    payload: record.encrypted_data,
-    _remote_id: record.record_id,
-    _updated_at: record.updated_at,
-  }));
+export async function syncRecordsToTodos(records) {
+  const results = [];
+  for (const record of records) {
+    const parsed = await parseDERRecord(record);
+    if (parsed) {
+      results.push({
+        id: parsed.id,
+        owner: parsed.owner,
+        payload: sanitizePayload(parsed.payload),
+        read_delegates: parsed.read_delegates || [],
+        write_delegates: parsed.write_delegates || [],
+        schema_version: parsed.schema_version || 0,
+        _remote_id: parsed.record_id,
+        _updated_at: parsed.updated_at,
+      });
+    }
+  }
+  return results;
 }
 
 /**
- * Perform full sync with pull-first strategy
+ * Perform full sync with pull-first strategy and DER v1 support.
  *
  * Strategy:
  * - PULL FIRST to see what server has
- * - Merge: take newer server versions into local
- * - THEN PUSH only records where local is newer than server
- * - This prevents stale local data from overwriting newer server data
+ * - Merge: take newer server versions into local (decrypt v1 records)
+ * - THEN PUSH only records where local is newer (encrypt as v1)
  *
  * Flow:
  * 1. Pull remote changes
@@ -310,25 +346,47 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
   let recordsUpdated = 0;
 
   for (const record of remoteData.records || []) {
-    const match = record.record_id.match(/^todo_(\d+)$/);
+    // Match both numeric IDs (legacy) and hex UUIDs
+    const match = record.record_id.match(/^todo_([a-f0-9]+)$/i);
     if (!match) continue;
 
-    const localId = parseInt(match[1], 10);
+    const localId = match[1]; // Keep as string (UUID)
     const serverUpdatedAt = record.updated_at;
     const remoteDeviceId = record.metadata?.device_id;
+    const isV1 = record.metadata?.schema_version >= 1 && record.encrypted_payload;
 
     const existing = await db.todos.get(localId);
 
     if (!existing) {
       // New record from server - add it
+      // Decrypt if v1, otherwise use encrypted_data as payload
+      let payload;
+      let readDelegates = [];
+      let writeDelegates = [];
+      let schemaVersion = 0;
+
+      if (isV1) {
+        const parsed = await parseDERRecord(record);
+        if (!parsed) continue; // decrypt failed
+        payload = parsed.payload;
+        readDelegates = parsed.read_delegates;
+        writeDelegates = parsed.write_delegates;
+        schemaVersion = parsed.schema_version;
+      } else {
+        payload = sanitizePayload(record.encrypted_data);
+      }
+
       await db.todos.put({
         id: localId,
         owner: record.metadata?.owner || ownerNpub,
-        payload: record.encrypted_data,
+        payload,
+        schema_version: schemaVersion,
+        read_delegates: readDelegates,
+        write_delegates: writeDelegates,
         server_updated_at: serverUpdatedAt,
       });
       newRecordsAdded++;
-      console.log(`Sync: Added new record ${localId} from server`);
+      console.log(`Sync: Added new record ${localId} from server (v${schemaVersion})`);
     } else {
       // Record exists locally - compare timestamps
       const localServerTime = existing.server_updated_at
@@ -348,37 +406,50 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
       }
 
       // Check if local has pending changes (edited since last sync)
-      // by comparing encrypted updated_at with server_updated_at
       let localHasPendingChanges = false;
       if (existing.payload) {
         try {
-          const decrypted = await decryptObject(existing.payload);
-          const localUpdatedAt = decrypted.updated_at || decrypted.created_at;
+          const parsed = JSON.parse(existing.payload);
+          const localUpdatedAt = parsed.updated_at || parsed.created_at;
           if (localUpdatedAt) {
             const localEditTime = new Date(localUpdatedAt).getTime();
-            // Local has pending changes if edited after last sync from server
             localHasPendingChanges = localEditTime > localServerTime;
           }
         } catch (err) {
-          // Can't decrypt - assume we DO have pending changes (safer)
-          // This prevents accidental overwrites if extension decrypt fails
-          console.warn(`Sync: Can't decrypt local record ${localId}, assuming pending changes:`, err.message);
+          console.warn(`Sync: Can't parse local record ${localId}, assuming pending changes:`, err.message);
           localHasPendingChanges = true;
         }
       }
 
-      // Take server version only if:
-      // 1. Server is newer than our last sync, AND
-      // 2. We don't have pending local changes
+      // Take server version only if server is newer AND no pending local changes
       if (remoteServerTime > localServerTime && !localHasPendingChanges) {
+        let payload;
+        let readDelegates = existing.read_delegates || [];
+        let writeDelegates = existing.write_delegates || [];
+        let schemaVersion = existing.schema_version || 0;
+
+        if (isV1) {
+          const parsed = await parseDERRecord(record);
+          if (!parsed) continue;
+          payload = parsed.payload;
+          readDelegates = parsed.read_delegates;
+          writeDelegates = parsed.write_delegates;
+          schemaVersion = parsed.schema_version;
+        } else {
+          payload = sanitizePayload(record.encrypted_data);
+        }
+
         await db.todos.put({
           id: localId,
           owner: record.metadata?.owner || ownerNpub,
-          payload: record.encrypted_data,
+          payload,
+          schema_version: schemaVersion,
+          read_delegates: readDelegates,
+          write_delegates: writeDelegates,
           server_updated_at: serverUpdatedAt,
         });
         recordsUpdated++;
-        console.log(`Sync: Updated record ${localId} (server newer: ${serverUpdatedAt} > ${existing.server_updated_at})`);
+        console.log(`Sync: Updated record ${localId} (server newer, v${schemaVersion})`);
       } else if (localHasPendingChanges) {
         console.log(`Sync: Skipping server update for ${localId} - local has pending changes`);
       }
@@ -386,19 +457,17 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
   }
 
   // 3. PUSH only records that are newer locally
-  // Get all local records and filter to those that need pushing
   const allLocalTodos = await getEncryptedTodosByOwner(ownerNpub);
-  const recordsToPush = [];
+  const todosToPush = [];
 
   for (const todo of allLocalTodos) {
     const recordId = `todo_${todo.id}`;
     const serverRecord = serverRecords.get(recordId);
 
-    // Get local updated_at from decrypted payload
     let localUpdatedAt = null;
     try {
-      const decrypted = await decryptObject(todo.payload);
-      localUpdatedAt = decrypted.updated_at || decrypted.created_at;
+      const parsed = JSON.parse(todo.payload);
+      localUpdatedAt = parsed.updated_at || parsed.created_at;
     } catch {
       localUpdatedAt = new Date().toISOString();
     }
@@ -408,32 +477,18 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
       ? new Date(serverRecord.updated_at).getTime()
       : 0;
 
-    // Push if:
-    // - Record doesn't exist on server, OR
-    // - Local client timestamp is newer than server timestamp (we made changes after last sync)
     if (!serverRecord || localTime > serverTime) {
-      recordsToPush.push({
-        record_id: recordId,
-        collection: 'todos',
-        encrypted_data: todo.payload,
-        metadata: {
-          local_id: todo.id,
-          owner: todo.owner,
-          updated_at: localUpdatedAt,
-          device_id: deviceId,
-        },
-      });
+      todosToPush.push(todo);
     }
   }
 
   let pushed = 0;
-  if (recordsToPush.length > 0) {
+  if (todosToPush.length > 0) {
+    // Encrypt and format as DER v1 before pushing
+    const recordsToPush = await formatTodosForDER(todosToPush);
     await client.syncRecords(recordsToPush);
     pushed = recordsToPush.length;
-    console.log(`Sync: Pushed ${pushed} records to server`);
-
-    // Update server_updated_at for pushed records
-    // (They'll get the actual timestamp on next pull)
+    console.log(`Sync: Pushed ${pushed} DER v1 records to server`);
   }
 
   return {

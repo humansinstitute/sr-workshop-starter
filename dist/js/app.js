@@ -1,6 +1,6 @@
 // Main Alpine.js application
 import Alpine from 'https://esm.sh/alpinejs@3.14.8';
-import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState } from './db.js';
+import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState, addDelegateToTodo, removeDelegateFromTodo, getTodoDelegates, migrateToV1 } from './db.js';
 import {
   signLoginEvent,
   getPubkeyFromEvent,
@@ -17,6 +17,7 @@ import {
   setMemoryPubkey,
   tryAutoLoginFromStorage,
   fetchProfile,
+  loadNostrLibs,
   STORAGE_KEYS,
 } from './nostr.js';
 import {
@@ -40,7 +41,7 @@ import {
   parseToken,
   performSync,
 } from './superbased.js';
-import { SyncNotifier } from './sync-notifier.js';
+import { SyncNotifier, DelegationNotifier } from './sync-notifier.js';
 import {
   publishSuperBasedToken,
   fetchSuperBasedTokenByApp,
@@ -74,6 +75,7 @@ Alpine.store('app', {
   showQrModal: false,
   showProfileModal: false,
   editingTodoId: null,
+  justSavedTodoId: null,
 
   // Key Teleport state
   showTeleportSetupModal: false,
@@ -92,10 +94,36 @@ Alpine.store('app', {
   superbasedConnected: false,
   isSavingSuperBased: false,
   isSyncing: false,
+
+  // Agent Connect
+  showAgentConnectModal: false,
+  agentConnectJson: '',
+  agentConfigCopied: false,
   lastSyncTime: null,
   superbasedClient: null,
   syncNotifier: null,
+  delegationNotifier: null,
   syncPollInterval: null,
+  // Sync status tracking
+  hasUnsyncedChanges: false,
+  lastLocalChangeTime: null,
+  lastSuccessfulSyncTime: null,
+
+  // Delegation state
+  showDelegationsModal: false,
+  delegations: [],
+  newDelegateNpub: '',
+  delegatePermRead: true,
+  delegatePermWrite: false,
+  delegationError: null,
+  isLoadingDelegations: false,
+  delegatedTodos: [],
+
+  // View state
+  currentView: 'list', // 'list' | 'kanban' | 'calendar'
+  calendarYear: new Date().getFullYear(),
+  calendarMonth: new Date().getMonth(),
+  calendarSelectedDate: null,
 
   // New todo input
   newTodoTitle: '',
@@ -133,6 +161,75 @@ Alpine.store('app', {
       parseTags(t.tags).forEach(tag => tagSet.add(tag));
     });
     return Array.from(tagSet).sort();
+  },
+
+  get todosByState() {
+    const result = { new: [], ready: [], in_progress: [], done: [] };
+    let todos = this.todos.filter(t => !t.deleted);
+    if (this.filterTags.length > 0) {
+      todos = todos.filter(t => {
+        const todoTags = parseTags(t.tags);
+        return this.filterTags.some(ft => todoTags.includes(ft.toLowerCase()));
+      });
+    }
+    for (const t of todos) {
+      if (result[t.state]) result[t.state].push(t);
+    }
+    return result;
+  },
+
+  get calendarMonthLabel() {
+    const d = new Date(this.calendarYear, this.calendarMonth, 1);
+    return d.toLocaleString('default', { month: 'long', year: 'numeric' });
+  },
+
+  get calendarDays() {
+    const year = this.calendarYear;
+    const month = this.calendarMonth;
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const daysInPrevMonth = new Date(year, month, 0).getDate();
+    const cells = [];
+    // Previous month padding
+    for (let i = firstDay - 1; i >= 0; i--) {
+      const day = daysInPrevMonth - i;
+      const d = new Date(year, month - 1, day);
+      cells.push({ date: this._formatDate(d), day, isCurrentMonth: false });
+    }
+    // Current month
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(year, month, day);
+      cells.push({ date: this._formatDate(d), day, isCurrentMonth: true });
+    }
+    // Next month padding to fill 6 rows
+    const remaining = 42 - cells.length;
+    for (let day = 1; day <= remaining; day++) {
+      const d = new Date(year, month + 1, day);
+      cells.push({ date: this._formatDate(d), day, isCurrentMonth: false });
+    }
+    return cells;
+  },
+
+  get scheduledTodosByDate() {
+    const map = {};
+    const todos = this.todos.filter(t => !t.deleted && t.scheduled_for);
+    for (const t of todos) {
+      if (!map[t.scheduled_for]) map[t.scheduled_for] = [];
+      map[t.scheduled_for].push(t);
+    }
+    return map;
+  },
+
+  get unscheduledTodos() {
+    return this.todos.filter(t => !t.deleted && !t.scheduled_for && t.state !== 'done');
+  },
+
+  // Sync status: 'disconnected' | 'syncing' | 'unsynced' | 'synced'
+  get syncStatus() {
+    if (!this.superbasedConnected) return 'disconnected';
+    if (this.isSyncing) return 'syncing';
+    if (this.hasUnsyncedChanges) return 'unsynced';
+    return 'synced';
   },
 
   get avatarFallback() {
@@ -205,6 +302,8 @@ Alpine.store('app', {
         await this.loadTodos();
         // Fetch profile in background
         this.loadProfile(storedAuth.pubkey);
+        // Check for saved SuperBased token and start background sync
+        this.initBackgroundSync();
         return;
       }
     }
@@ -241,6 +340,9 @@ Alpine.store('app', {
 
       // Fetch profile in background (don't block login)
       this.loadProfile(pubkey);
+
+      // Check for saved SuperBased token and start background sync
+      this.initBackgroundSync();
     } catch (err) {
       console.error('Login failed:', err);
       this.loginError = err.message || 'Login failed.';
@@ -250,13 +352,60 @@ Alpine.store('app', {
   },
 
   async logout() {
+    // Stop auto-sync if running
+    this.stopAutoSync();
+
+    // Clean up notifiers
+    if (this.syncNotifier) {
+      this.syncNotifier.destroy();
+      this.syncNotifier = null;
+    }
+    if (this.delegationNotifier) {
+      this.delegationNotifier.destroy();
+      this.delegationNotifier = null;
+    }
+
+    // Clear all local data
+    try {
+      // Clear IndexedDB
+      const { db } = await import('./db.js');
+      await db.todos.clear();
+      console.log('Cleared IndexedDB todos');
+
+      // Clear all localStorage
+      localStorage.clear();
+      console.log('Cleared localStorage');
+
+      // Clear service worker caches
+      if ('caches' in window) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map(name => caches.delete(name)));
+        console.log('Cleared service worker caches');
+      }
+
+      // Unregister service worker
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.map(reg => reg.unregister()));
+        console.log('Unregistered service workers');
+      }
+    } catch (err) {
+      console.error('Error clearing data:', err);
+    }
+
+    // Reset app state
     this.session = null;
     this.profile = null;
     this.todos = [];
     this.filterTags = [];
     this.showAvatarMenu = false;
+    this.superbasedClient = null;
+    this.superbasedConnected = false;
     await clearAutoLogin();
     clearMemoryCredentials();
+
+    // Reload page for clean state
+    window.location.reload();
   },
 
   async loadProfile(pubkeyHex) {
@@ -272,6 +421,10 @@ Alpine.store('app', {
 
   async loadTodos() {
     if (!this.session?.npub) return;
+
+    // Lazy v0→v1 migration on first load
+    await migrateToV1(this.session.npub);
+
     this.todos = await getTodosByOwner(this.session.npub);
 
     // Check SuperBased connection after todos are loaded
@@ -291,6 +444,10 @@ Alpine.store('app', {
     this.newTodoTitle = '';
     await this.loadTodos();
 
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
+
     // Auto-sync if connected
     if (this.superbasedClient && !this.isSyncing) {
       this.syncNow();
@@ -300,11 +457,24 @@ Alpine.store('app', {
   async updateTodoField(id, field, value) {
     await updateTodo(id, { [field]: value });
     await this.loadTodos();
+
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
+
+    // Auto-sync if connected
+    if (this.superbasedClient && !this.isSyncing) {
+      this.syncNow();
+    }
   },
 
   async transitionState(id, newState) {
     await transitionTodoState(id, newState);
     await this.loadTodos();
+
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
 
     // Auto-sync if connected
     if (this.superbasedClient && !this.isSyncing) {
@@ -315,6 +485,10 @@ Alpine.store('app', {
   async deleteTodoItem(id) {
     await deleteTodo(id);
     await this.loadTodos();
+
+    // Mark as having unsynced changes
+    this.hasUnsyncedChanges = true;
+    this.lastLocalChangeTime = Date.now();
 
     // Auto-sync if connected
     if (this.superbasedClient && !this.isSyncing) {
@@ -337,6 +511,64 @@ Alpine.store('app', {
 
   isTagActive(tag) {
     return this.filterTags.includes(tag.toLowerCase());
+  },
+
+  // Calendar methods
+  _formatDate(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  },
+
+  todosForDate(dateStr) {
+    return this.scheduledTodosByDate[dateStr] || [];
+  },
+
+  prevMonth() {
+    if (this.calendarMonth === 0) {
+      this.calendarMonth = 11;
+      this.calendarYear--;
+    } else {
+      this.calendarMonth--;
+    }
+  },
+
+  nextMonth() {
+    if (this.calendarMonth === 11) {
+      this.calendarMonth = 0;
+      this.calendarYear++;
+    } else {
+      this.calendarMonth++;
+    }
+  },
+
+  goToToday() {
+    const now = new Date();
+    this.calendarYear = now.getFullYear();
+    this.calendarMonth = now.getMonth();
+    this.calendarSelectedDate = this._formatDate(now);
+  },
+
+  selectDate(dateStr) {
+    this.calendarSelectedDate = this.calendarSelectedDate === dateStr ? null : dateStr;
+  },
+
+  isToday(dateStr) {
+    return dateStr === this._formatDate(new Date());
+  },
+
+  // Drag and drop handlers
+  async handleKanbanDrop(todoId, newState) {
+    const todo = this.todos.find(t => t.id === todoId);
+    if (!todo || todo.state === newState) return;
+    const allowed = ALLOWED_STATE_TRANSITIONS[todo.state] || [];
+    if (!allowed.includes(newState)) return; // silently reject invalid transitions
+    await this.transitionState(todoId, newState);
+  },
+
+  async handleCalendarDrop(todoId, newDate) {
+    await this.updateTodoField(todoId, 'scheduled_for', newDate);
   },
 
   toggleArchive() {
@@ -395,8 +627,12 @@ Alpine.store('app', {
   },
 
   async showLoginQr() {
-    if (this.session?.method !== 'ephemeral') {
-      alert('Login QR is only available for ephemeral accounts.');
+    // Allow QR login for sessions that have access to the decrypted nsec in memory
+    // - ephemeral: generated on sign up
+    // - secret: BYO nsec or Key Teleport (which uses 'secret' internally)
+    const allowedMethods = ['ephemeral', 'secret'];
+    if (!allowedMethods.includes(this.session?.method)) {
+      alert('Login QR is only available for accounts with a local secret key.');
       return;
     }
     this.showAvatarMenu = false;
@@ -529,12 +765,61 @@ Alpine.store('app', {
     this.showSuperBasedModal = true;
   },
 
+  // Agent Connect - show connection config for AI agents
+  async showAgentConnect() {
+    this.showAvatarMenu = false;
+    this.agentConfigCopied = false;
+
+    // Build the config JSON
+    const config = {
+      superbasedURL: this.superbasedClient?.config?.httpUrl || '',
+      userKey: this.session?.pubkey || '',
+      userNpub: this.session?.npub || '',
+      superbasedAppKey: '',
+    };
+
+    // Convert app npub to hex
+    if (this.superbasedClient?.config?.appNpub) {
+      try {
+        const { nip19 } = await loadNostrLibs();
+        const decoded = nip19.decode(this.superbasedClient.config.appNpub);
+        config.superbasedAppKey = decoded.data;
+      } catch (err) {
+        console.error('Failed to decode app npub:', err);
+      }
+    }
+
+    this.agentConnectJson = JSON.stringify(config, null, 2);
+    this.showAgentConnectModal = true;
+  },
+
+  async copyAgentConfig() {
+    try {
+      await navigator.clipboard.writeText(this.agentConnectJson);
+      this.agentConfigCopied = true;
+      setTimeout(() => {
+        this.agentConfigCopied = false;
+      }, 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  },
+
+  // Hardcoded OtherStuff Superbased token for workshop (StarterTodoApp)
+  OTHERSTUFF_TOKEN: 'eyJraW5kIjozMDA3OCwiY3JlYXRlZF9hdCI6MTc3MDIwNTM4NCwidGFncyI6W1siZCIsInN1cGVyYmFzZWQtdG9rZW4iXSxbImFwcCIsIm5wdWIxcXphc3BscnQzeGU1dWp2Znlnem03cG5uZmM1em5lZHdtanh2cGt2cXRjYzZoNTU3M2t3cTU0cHB3bSJdLFsic2VydmVyIiwibnB1YjE0Z2s1MHdwd3BldGE4ZmZrNmY0NnhsdDV5NHlwdXNwd3RlMjBlazR0OXltMzl1djh0dGRzNHVuNm11Il0sWyJyZWxheSIsIndzczovL3JlbGF5LmRhbXVzLmlvIl0sWyJhdHRlc3RhdGlvbiIsImV5SnJhVzVrSWpvek1EQTNPU3dpWTNKbFlYUmxaRjloZENJNk1UYzNNREl3TlRJMk9Dd2lkR0ZuY3lJNlcxc2laQ0lzSW5OMWNHVnlZbUZ6WldRdGNtVm5hWE4wY21GMGFXOXVJbDBzV3lKelpYSjJaWElpTENKdWNIVmlNVFJuYXpVd2QzQjNjR1YwWVRobVptczJaalEyZUd4ME5YazBlWEIxYzNCM2RHVXlNR1ZyTkhRNWVXMHpPWFYyT0hSMFpITTBkVzQyYlhVaVhTeGJJbTVoYldVaUxDSlRkR0Z5ZEdWeVZHOWtiMEZ3Y0NKZFhTd2lZMjl1ZEdWdWRDSTZJaUlzSW5CMVltdGxlU0k2SWpBd1ltSXdNR1pqTm1JNE9XSXpOR1UwT1RnNU1qSXdOV0ptTURZM016UmxNamd5T1dVMVlXVmtZemhqWXpCa09UZ3dOV1V6TVdGaVpESTVaVGhrT1dNaUxDSnBaQ0k2SWpBMU5EazRNamhoT0RBNVlUQm1PRGd5TWpOaE16STJOMlZpWWpKaU1qSXlPV000WVROaU1XTmhOak0wTWpVeE5XSTBZamN6T1RRd04yVXpaVE15T1dRaUxDSnphV2NpT2lJM05tWmlabU13WWpBMU56Sm1OMkkyWVRReFpXTmhNVGcxTlRSa1pqQXdaRFk0T1RsaFlUSmhOVEU0WmpCbVpURmhabVF3TWpRMk4yVTVaakl6T1dZME5EQmhNVEE1WXpZeE16TTJZbVZrWXpnd1kyRTRPR1JrTkdRMVpqQmxZMkl6WkdRd1l6bGtNVEkxTW1WbVlUWTRZVFJpTldFM05qZzNNbVUyWVRJd1lTSjkiXSxbImh0dHAiLCJodHRwczovL3NiLm90aGVyc3R1ZmYuc3R1ZGlvIl1dLCJjb250ZW50IjoiIiwicHVia2V5IjoiYWEyZDQ3YjgyZTBlNTdkM2E1MzZkMjZiYTM3ZDc0MjU0ODFlNDAyZTVlNTRmY2RhYWIyOTM3MTJmMTg3NWFkYiIsImlkIjoiNzUyODIyMTRlNWFhYWJjNTBmNDc2MjdhYTRkOGQxN2I2YzQ4MTFkMWQ1OGUyYzhmYTI0OWVkY2JkNzQwYmUxNyIsInNpZyI6IjU2ODcwMmMxMjkzM2NmMzYyYTE5NjNhYjUxMzdhOTEzN2VmZDBlODM1YzM0Njk2MWZmM2RiNWIwYTdmYjY5YmZlODI5MWE0MTFiMzVjNzZiNzQ4NTgxYmE2NTRlZjFlNWFhMzk2NDlhZGIxNmE1MWRhZWMxNDEzMjFlYTlkZDFmIn0=',
+
+  async connectWithOtherStuff() {
+    this.superbasedTokenInput = this.OTHERSTUFF_TOKEN;
+    await this.saveSuperBasedToken();
+  },
+
   async saveSuperBasedToken() {
     const token = this.superbasedTokenInput.trim();
     if (!token) {
       this.superbasedError = 'Please paste a token';
       return;
     }
+
 
     this.isSavingSuperBased = true;
     this.superbasedError = null;
@@ -621,6 +906,22 @@ Alpine.store('app', {
       // Don't fail the connection, just disable real-time notifications
       this.syncNotifier = null;
     }
+
+    // Initialize DelegationNotifier for task assignment notifications
+    try {
+      this.delegationNotifier = new DelegationNotifier(appNpub);
+      await this.delegationNotifier.init();
+      console.log('SuperBased: DelegationNotifier ready');
+    } catch (err) {
+      console.error('SuperBased: DelegationNotifier failed (non-fatal):', err);
+      this.delegationNotifier = null;
+    }
+  },
+
+  // Initialize background sync from saved token (called on auto-login)
+  // Alias for checkSuperBasedConnection - kept for compatibility
+  async initBackgroundSync() {
+    return this.checkSuperBasedConnection();
   },
 
   // Start auto-sync polling (always runs in background)
@@ -652,6 +953,12 @@ Alpine.store('app', {
       this.syncNotifier = null;
     }
 
+    // Clean up DelegationNotifier
+    if (this.delegationNotifier) {
+      this.delegationNotifier.destroy();
+      this.delegationNotifier = null;
+    }
+
     // Optionally delete from Nostr
     if (deleteFromNostr && this.superbasedClient) {
       const { appNpub, httpUrl } = this.superbasedClient.config || {};
@@ -668,6 +975,9 @@ Alpine.store('app', {
     this.superbasedClient = null;
     this.superbasedTokenInput = '';
     this.lastSyncTime = null;
+    this.lastSuccessfulSyncTime = null;
+    this.lastLocalChangeTime = null;
+    this.hasUnsyncedChanges = false;
     this.showSuperBasedModal = false;
   },
 
@@ -676,12 +986,19 @@ Alpine.store('app', {
     if (this.isSyncing) return; // Prevent concurrent syncs
 
     this.isSyncing = true;
+    const syncStartTime = Date.now();
 
     try {
       const result = await performSync(this.superbasedClient, this.session.npub);
 
       // Update last sync time for display
       this.lastSyncTime = new Date().toLocaleString();
+      this.lastSuccessfulSyncTime = Date.now();
+
+      // Clear unsynced flag if no local changes occurred during sync
+      if (!this.lastLocalChangeTime || this.lastLocalChangeTime <= syncStartTime) {
+        this.hasUnsyncedChanges = false;
+      }
 
       // Reload UI if we pulled new records or updated existing ones (avoids unnecessary redraws)
       if (result.pulled > 0 || result.updated > 0) {
@@ -692,8 +1009,14 @@ Alpine.store('app', {
       if (!skipNotify && this.syncNotifier && result.pushed > 0) {
         await this.syncNotifier.publish();
       }
+
+      // Notify delegates if there are task assignments
+      if (this.delegationNotifier && result.delegateNotifications?.length > 0) {
+        console.log(`Sync: Publishing ${result.delegateNotifications.length} delegation notification(s)`);
+        await this.delegationNotifier.publishAssignments(result.delegateNotifications);
+      }
     } catch (err) {
-      // Silent fail for background polling
+      // Silent fail for background polling, but keep hasUnsyncedChanges true
       if (!skipNotify) {
         this.superbasedError = err.message;
       }
@@ -703,13 +1026,8 @@ Alpine.store('app', {
   },
 
   async checkSuperBasedConnection() {
-    // First check localStorage for existing token
-    let token = localStorage.getItem('superbased_token');
-
-    // If no local token, try to fetch from Nostr
-    if (!token && this.session?.npub) {
-      token = await this.tryFetchTokenFromNostr();
-    }
+    // WORKSHOP MODE: Always use hardcoded token
+    let token = this.OTHERSTUFF_TOKEN;
 
     if (token && this.session?.npub) {
       try {
@@ -772,10 +1090,207 @@ Alpine.store('app', {
       return null;
     }
   },
+
+  // ===========================================
+  // Delegation Methods
+  // ===========================================
+
+  openDelegationsModal() {
+    this.showAvatarMenu = false;
+    this.delegationError = null;
+    this.newDelegateNpub = '';
+    this.delegatePermRead = true;
+    this.delegatePermWrite = false;
+    this.showDelegationsModal = true;
+    this.loadDelegations();
+  },
+
+  async loadDelegations() {
+    if (!this.superbasedClient) return;
+
+    this.isLoadingDelegations = true;
+    try {
+      const result = await this.superbasedClient.listDelegations();
+      this.delegations = result.delegations || [];
+    } catch (err) {
+      console.error('Failed to load delegations:', err);
+      this.delegationError = err.message;
+    } finally {
+      this.isLoadingDelegations = false;
+    }
+  },
+
+  async addDelegation() {
+    if (!this.newDelegateNpub.trim()) {
+      this.delegationError = 'Please enter an npub';
+      return;
+    }
+
+    const permissions = [];
+    if (this.delegatePermRead) permissions.push('read');
+    if (this.delegatePermWrite) permissions.push('write');
+
+    if (permissions.length === 0) {
+      this.delegationError = 'Select at least one permission';
+      return;
+    }
+
+    this.delegationError = null;
+
+    try {
+      // Grant delegation on SuperBased server
+      await this.superbasedClient.grantDelegation(
+        this.newDelegateNpub.trim(),
+        permissions
+      );
+
+      // Convert npub to hex for per-record delegation
+      const { nip19 } = await loadNostrLibs();
+      let delegateHex = this.newDelegateNpub.trim();
+      if (delegateHex.startsWith('npub1')) {
+        const decoded = nip19.decode(delegateHex);
+        delegateHex = decoded.data;
+      }
+
+      // Add delegate to all current todos
+      const permission = this.delegatePermWrite ? 'write' : 'read';
+      const manifestRecords = [];
+      for (const todo of this.todos) {
+        try {
+          await addDelegateToTodo(todo.id, delegateHex, permission);
+          manifestRecords.push({
+            record_id: todo.id,
+            collection: 'todos',
+            access: permission,
+            delegated_at: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.error(`Failed to add delegate to todo ${todo.id}:`, err);
+        }
+      }
+
+      // Publish delegation manifest to Nostr
+      if (this.delegationNotifier && manifestRecords.length > 0) {
+        const apiBaseUrl = this.superbasedClient?.config?.httpUrl || '';
+        await this.delegationNotifier.publishDelegationManifest(
+          delegateHex,
+          manifestRecords,
+          apiBaseUrl
+        );
+      }
+
+      this.newDelegateNpub = '';
+      this.delegatePermRead = true;
+      this.delegatePermWrite = false;
+      await this.loadDelegations();
+      await this.loadTodos();
+
+      // Trigger sync to push updated delegate payloads
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
+    } catch (err) {
+      console.error('Failed to grant delegation:', err);
+      this.delegationError = err.message;
+    }
+  },
+
+  async revokeDelegation(delegatePubkey) {
+    if (!confirm('Revoke access for this user?')) return;
+
+    try {
+      // Need to convert pubkey hex to npub for the API
+      const { nip19 } = await loadNostrLibs();
+      const delegateNpub = nip19.npubEncode(delegatePubkey);
+      await this.superbasedClient.revokeDelegation(delegateNpub);
+
+      // Remove delegate from all todos
+      for (const todo of this.todos) {
+        try {
+          await removeDelegateFromTodo(todo.id, delegatePubkey);
+        } catch (err) {
+          console.error(`Failed to remove delegate from todo ${todo.id}:`, err);
+        }
+      }
+
+      // Republish empty manifest (revokes all records for this delegate)
+      if (this.delegationNotifier) {
+        const apiBaseUrl = this.superbasedClient?.config?.httpUrl || '';
+        await this.delegationNotifier.publishDelegationManifest(
+          delegatePubkey,
+          [], // Empty records = revoked
+          apiBaseUrl
+        );
+      }
+
+      await this.loadDelegations();
+      await this.loadTodos();
+
+      // Trigger sync to push updated records without delegate payloads
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
+    } catch (err) {
+      console.error('Failed to revoke delegation:', err);
+      this.delegationError = err.message;
+    }
+  },
+
+  formatNpubShort(pubkeyHex) {
+    if (!pubkeyHex) return '';
+    return pubkeyHex.slice(0, 8) + '...' + pubkeyHex.slice(-4);
+  },
+
+  formatPermissions(permissions) {
+    return (permissions || []).join(', ');
+  },
+
+  // Per-record delegate management
+  async manageTodoDelegates(todoId) {
+    try {
+      const delegates = await getTodoDelegates(todoId);
+      return delegates;
+    } catch (err) {
+      console.error('Failed to get todo delegates:', err);
+      return { read_delegates: [], write_delegates: [] };
+    }
+  },
+
+  async addDelegateToRecord(todoId, pubkeyHex, permission) {
+    try {
+      await addDelegateToTodo(todoId, pubkeyHex, permission);
+      await this.loadTodos();
+
+      // Trigger sync to push updated delegate payloads
+      this.hasUnsyncedChanges = true;
+      this.lastLocalChangeTime = Date.now();
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
+    } catch (err) {
+      console.error('Failed to add delegate to record:', err);
+    }
+  },
+
+  async removeDelegateFromRecord(todoId, pubkeyHex) {
+    try {
+      await removeDelegateFromTodo(todoId, pubkeyHex);
+      await this.loadTodos();
+
+      this.hasUnsyncedChanges = true;
+      this.lastLocalChangeTime = Date.now();
+      if (this.superbasedClient && !this.isSyncing) {
+        this.syncNow();
+      }
+    } catch (err) {
+      console.error('Failed to remove delegate from record:', err);
+    }
+  },
 });
 
 // Todo item component
 Alpine.data('todoItem', (todo) => ({
+  todoId: todo.id,
   localTodo: { ...todo },
   tagInput: '',
   _lastSyncedAt: todo.updated_at,
@@ -798,6 +1313,7 @@ Alpine.data('todoItem', (todo) => ({
         this._lastSyncedAt = freshTodo.updated_at;
       }
     });
+
   },
 
   get tagsArray() {
@@ -814,12 +1330,26 @@ Alpine.data('todoItem', (todo) => ({
         state: this.localTodo.state,
         scheduled_for: this.localTodo.scheduled_for || null,
         tags: this.localTodo.tags,
+        assigned_to: this.localTodo.assigned_to || null,
       });
+      const savedId = this.localTodo.id;
       store.stopEditing();
-      // Close the details element
-      const details = this.$el.querySelector('details');
-      if (details) details.open = false;
+
+      // Set BEFORE loadTodos so new component sees it on init
+      store.justSavedTodoId = savedId;
+
       await store.loadTodos();
+
+      // Clear after animation completes
+      setTimeout(() => {
+        if (store.justSavedTodoId === savedId) {
+          store.justSavedTodoId = null;
+        }
+      }, 700);
+
+      // Mark as having unsynced changes
+      store.hasUnsyncedChanges = true;
+      store.lastLocalChangeTime = Date.now();
 
       // Trigger sync after save
       if (store.superbasedClient && !store.isSyncing) {

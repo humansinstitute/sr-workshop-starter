@@ -56,6 +56,13 @@ export function parseToken(tokenBase64) {
   }
 }
 
+// Serialize extension signEvent calls to prevent race conditions (Safari)
+let _signQueue = Promise.resolve();
+function serialSignEvent(event) {
+  _signQueue = _signQueue.then(() => window.nostr.signEvent(event)).catch(() => window.nostr.signEvent(event));
+  return _signQueue;
+}
+
 /**
  * Create NIP-98 HTTP Auth header
  */
@@ -94,7 +101,7 @@ async function createNip98Auth(url, method, body = null) {
         pubkey,
       };
 
-      const signedEvent = await window.nostr.signEvent(event);
+      const signedEvent = await serialSignEvent(event);
       return `Nostr ${btoa(JSON.stringify(signedEvent))}`;
     }
     throw new Error('No signing key available');
@@ -353,40 +360,28 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
     const localId = match[1]; // Keep as string (UUID)
     const serverUpdatedAt = record.updated_at;
     const remoteDeviceId = record.metadata?.device_id;
-    const isV1 = record.metadata?.schema_version >= 1 && record.encrypted_payload;
+    const isV1 = record.metadata?.schema_version >= 1 && record.encrypted_data;
 
     const existing = await db.todos.get(localId);
 
-    if (!existing) {
-      // New record from server - add it
-      // Decrypt if v1, otherwise use encrypted_data as payload
-      let payload;
-      let readDelegates = [];
-      let writeDelegates = [];
-      let schemaVersion = 0;
+    // Skip v0 records or records without encrypted data
+    if (!isV1) continue;
 
-      if (isV1) {
-        const parsed = await parseDERRecord(record);
-        if (!parsed) continue; // decrypt failed
-        payload = parsed.payload;
-        readDelegates = parsed.read_delegates;
-        writeDelegates = parsed.write_delegates;
-        schemaVersion = parsed.schema_version;
-      } else {
-        payload = sanitizePayload(record.encrypted_data);
-      }
+    if (!existing) {
+      const parsed = await parseDERRecord(record);
+      if (!parsed) continue;
 
       await db.todos.put({
         id: localId,
-        owner: record.metadata?.owner || ownerNpub,
-        payload,
-        schema_version: schemaVersion,
-        read_delegates: readDelegates,
-        write_delegates: writeDelegates,
+        owner: parsed.owner || record.metadata?.owner || ownerNpub,
+        payload: parsed.payload,
+        schema_version: parsed.schema_version || 0,
+        read_delegates: parsed.read_delegates || [],
+        write_delegates: parsed.write_delegates || [],
         server_updated_at: serverUpdatedAt,
       });
       newRecordsAdded++;
-      console.log(`Sync: Added new record ${localId} from server (v${schemaVersion})`);
+      console.log(`Sync: Added new record ${localId} from server (v${parsed.schema_version || 0})`);
     } else {
       // Record exists locally - compare timestamps
       const localServerTime = existing.server_updated_at
@@ -423,33 +418,21 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
 
       // Take server version only if server is newer AND no pending local changes
       if (remoteServerTime > localServerTime && !localHasPendingChanges) {
-        let payload;
-        let readDelegates = existing.read_delegates || [];
-        let writeDelegates = existing.write_delegates || [];
-        let schemaVersion = existing.schema_version || 0;
-
-        if (isV1) {
-          const parsed = await parseDERRecord(record);
-          if (!parsed) continue;
-          payload = parsed.payload;
-          readDelegates = parsed.read_delegates;
-          writeDelegates = parsed.write_delegates;
-          schemaVersion = parsed.schema_version;
-        } else {
-          payload = sanitizePayload(record.encrypted_data);
-        }
+        // Decrypt via parseDERRecord (handles both v0 and v1)
+        const parsed = await parseDERRecord(record);
+        if (!parsed) continue;
 
         await db.todos.put({
           id: localId,
-          owner: record.metadata?.owner || ownerNpub,
-          payload,
-          schema_version: schemaVersion,
-          read_delegates: readDelegates,
-          write_delegates: writeDelegates,
+          owner: parsed.owner || record.metadata?.owner || ownerNpub,
+          payload: parsed.payload,
+          schema_version: parsed.schema_version || 0,
+          read_delegates: parsed.read_delegates || [],
+          write_delegates: parsed.write_delegates || [],
           server_updated_at: serverUpdatedAt,
         });
         recordsUpdated++;
-        console.log(`Sync: Updated record ${localId} (server newer, v${schemaVersion})`);
+        console.log(`Sync: Updated record ${localId} (server newer, v${parsed.schema_version || 0})`);
       } else if (localHasPendingChanges) {
         console.log(`Sync: Skipping server update for ${localId} - local has pending changes`);
       }
@@ -469,15 +452,20 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
       const parsed = JSON.parse(todo.payload);
       localUpdatedAt = parsed.updated_at || parsed.created_at;
     } catch {
-      localUpdatedAt = new Date().toISOString();
+      // Unparseable payload (e.g. stale v0 encrypted data) — skip, don't push garbage
+      continue;
     }
 
     const localTime = localUpdatedAt ? new Date(localUpdatedAt).getTime() : 0;
     const serverTime = serverRecord?.updated_at
       ? new Date(serverRecord.updated_at).getTime()
       : 0;
+    const localServerTime = todo.server_updated_at
+      ? new Date(todo.server_updated_at).getTime()
+      : 0;
 
-    if (!serverRecord || localTime > serverTime) {
+    // Push if: not on server, OR local is newer than BOTH server timestamp and our last push
+    if (!serverRecord || (localTime > serverTime && localTime > localServerTime)) {
       todosToPush.push(todo);
     }
   }
@@ -486,9 +474,20 @@ export async function performSync(client, ownerNpub, lastSyncTime = null) {
   if (todosToPush.length > 0) {
     // Encrypt and format as DER v1 before pushing
     const recordsToPush = await formatTodosForDER(todosToPush);
-    await client.syncRecords(recordsToPush);
+    const syncResponse = await client.syncRecords(recordsToPush);
     pushed = recordsToPush.length;
-    console.log(`Sync: Pushed ${pushed} DER v1 records to server`);
+    console.log(`Sync: Pushed ${pushed} DER v1 records to server`, syncResponse);
+
+    // Check if server actually created/updated the records
+    if (syncResponse && (syncResponse.created === 0 && syncResponse.updated === 0)) {
+      console.warn('Sync: Server returned 0 created/updated - records may not have been saved!', syncResponse);
+    }
+
+    // Stamp server_updated_at on pushed records so they aren't re-pushed next cycle
+    const now = new Date().toISOString();
+    for (const todo of todosToPush) {
+      await db.todos.update(todo.id, { server_updated_at: now });
+    }
   }
 
   return {

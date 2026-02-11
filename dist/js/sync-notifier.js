@@ -219,3 +219,313 @@ export class SyncNotifier {
     }
   }
 }
+
+// ============================================
+// DelegationNotifier - notifies bots/agents of task assignments
+// Kind: 30078 - Replaceable delegation manifest (DER)
+// ============================================
+
+const DELEGATION_MANIFEST_KIND = 30078;
+const DELEGATION_RELAYS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://purplepag.es',
+  'wss://relay.nostr.band',
+];
+
+export class DelegationNotifier {
+  constructor(appNpub) {
+    this.appNpub = appNpub;
+    this.relayPool = null;
+    this.userPubkeyHex = null;
+    this.subscriptions = [];
+    this.onDelegation = null;
+    this.superbasedPubkeyHex = null; // Set from token config
+  }
+
+  async init() {
+    const { pool, nip19 } = await loadNostrLibs();
+    this.relayPool = new pool.SimplePool();
+    this.nip19 = nip19;
+
+    // Get user pubkey
+    const pubkey = getMemoryPubkey();
+    if (pubkey) {
+      this.userPubkeyHex = pubkey;
+    } else if (window.nostr) {
+      this.userPubkeyHex = await window.nostr.getPublicKey();
+    } else {
+      throw new Error('No user pubkey available');
+    }
+
+    // Derive superbased pubkey from appNpub
+    if (this.appNpub) {
+      try {
+        const decoded = nip19.decode(this.appNpub);
+        this.superbasedPubkeyHex = decoded.data;
+      } catch { /* ignore */ }
+    }
+
+    console.log('DelegationNotifier: initialized for app', this.appNpub?.slice(0, 15) + '...');
+  }
+
+  // Convert npub to hex if needed
+  _toHex(pubkey) {
+    if (pubkey.startsWith('npub1')) {
+      const decoded = this.nip19.decode(pubkey);
+      return decoded.data;
+    }
+    return pubkey;
+  }
+
+  /**
+   * Publish a delegation notification to a delegate (legacy per-record)
+   */
+  async publishAssignment(delegatePubkey, recordId, action = 'assign') {
+    const { pure } = await loadNostrLibs();
+    const secret = getMemorySecret();
+
+    try {
+      const delegateHex = this._toHex(delegatePubkey);
+      const now = Date.now();
+
+      let signedEvent;
+
+      const eventTemplate = {
+        kind: DELEGATION_MANIFEST_KIND,
+        created_at: Math.floor(now / 1000),
+        tags: [
+          ['d', this.appNpub],
+          ['p', delegateHex],
+          ['t', 'der-delegation'],
+          ['record', recordId],
+          ['action', action],
+        ],
+        content: '',
+      };
+
+      if (secret) {
+        signedEvent = pure.finalizeEvent(eventTemplate, secret);
+      } else if (window.nostr) {
+        eventTemplate.pubkey = this.userPubkeyHex;
+        signedEvent = await window.nostr.signEvent(eventTemplate);
+      } else {
+        console.error('DelegationNotifier: no signing method');
+        return false;
+      }
+
+      const results = await Promise.allSettled(
+        DELEGATION_RELAYS.map(relay =>
+          this.relayPool.publish([relay], signedEvent)
+        )
+      );
+
+      const successCount = results.filter(r => r.status === 'fulfilled').length;
+      console.log(`DelegationNotifier: published ${action} for ${recordId} to ${delegatePubkey.slice(0, 15)}... (${successCount}/${DELEGATION_RELAYS.length} relays)`);
+
+      return true;
+    } catch (err) {
+      console.error('DelegationNotifier: publish failed:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Publish notifications for multiple assignments (batch)
+   */
+  async publishAssignments(assignments) {
+    const results = [];
+    for (const { delegatePubkey, recordId, action } of assignments) {
+      const result = await this.publishAssignment(delegatePubkey, recordId, action || 'assign');
+      results.push({ delegatePubkey, recordId, success: result });
+    }
+    return results;
+  }
+
+  /**
+   * Publish a full delegation manifest (kind 30078 replaceable event).
+   * One manifest per delegate per app/superbased instance.
+   * Content is NIP-44 encrypted to the delegate pubkey.
+   *
+   * @param {string} delegatePubkey - hex pubkey of the delegate
+   * @param {Array} records - [{ record_id, collection, access: 'read'|'write', delegated_at }]
+   * @param {string} apiBaseUrl - SuperBased HTTP URL
+   */
+  async publishDelegationManifest(delegatePubkey, records, apiBaseUrl) {
+    const { pure, nip44 } = await loadNostrLibs();
+    const secret = getMemorySecret();
+    const delegateHex = this._toHex(delegatePubkey);
+
+    const dTag = `super-based-todo_${this.superbasedPubkeyHex || this.appNpub}`;
+
+    // Build manifest content
+    const manifest = {
+      superbased_pubkey: this.superbasedPubkeyHex || '',
+      api_base_url: apiBaseUrl || '',
+      app: 'super-based-todo',
+      delegated_by: this.userPubkeyHex,
+      updated_at: new Date().toISOString(),
+      records,
+    };
+
+    const plaintext = JSON.stringify(manifest);
+    let encryptedContent;
+    let signedEvent;
+
+    try {
+      const now = Date.now();
+
+      if (secret) {
+        // Encrypt to delegate
+        const conversationKey = nip44.v2.utils.getConversationKey(secret, delegateHex);
+        encryptedContent = nip44.v2.encrypt(plaintext, conversationKey);
+
+        signedEvent = pure.finalizeEvent({
+          kind: DELEGATION_MANIFEST_KIND,
+          created_at: Math.floor(now / 1000),
+          tags: [
+            ['d', dTag],
+            ['p', delegateHex],
+            ['t', 'der-delegation'],
+          ],
+          content: encryptedContent,
+        }, secret);
+      } else if (window.nostr) {
+        encryptedContent = await window.nostr.nip44.encrypt(delegateHex, plaintext);
+
+        const eventTemplate = {
+          kind: DELEGATION_MANIFEST_KIND,
+          created_at: Math.floor(now / 1000),
+          pubkey: this.userPubkeyHex,
+          tags: [
+            ['d', dTag],
+            ['p', delegateHex],
+            ['t', 'der-delegation'],
+          ],
+          content: encryptedContent,
+        };
+
+        signedEvent = await window.nostr.signEvent(eventTemplate);
+      } else {
+        console.error('DelegationNotifier: no signing method');
+        return false;
+      }
+
+      const results = await Promise.allSettled(
+        DELEGATION_RELAYS.map(relay =>
+          this.relayPool.publish([relay], signedEvent)
+        )
+      );
+
+      const successCount = results.filter(r => r.status === 'fulfilled').length;
+      console.log(`DelegationNotifier: published manifest for ${delegateHex.slice(0, 12)}... with ${records.length} records (${successCount}/${DELEGATION_RELAYS.length} relays)`);
+      return true;
+    } catch (err) {
+      console.error('DelegationNotifier: manifest publish failed:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Subscribe to delegation notifications (for bots/agents)
+   * Listens for kind 30078 events tagged with our pubkey
+   */
+  startSubscription(callback) {
+    if (!this.relayPool || !this.userPubkeyHex) {
+      console.error('DelegationNotifier: not initialized');
+      return;
+    }
+
+    this.onDelegation = callback;
+
+    const filter = {
+      kinds: [DELEGATION_MANIFEST_KIND],
+      '#p': [this.userPubkeyHex],
+      '#t': ['der-delegation'],
+      since: Math.floor(Date.now() / 1000) - 300,
+    };
+
+    console.log('DelegationNotifier: subscribing to delegation manifests');
+
+    const sub = this.relayPool.subscribeMany(
+      DELEGATION_RELAYS,
+      [filter],
+      {
+        onevent: async (event) => {
+          await this.handleEvent(event);
+        },
+        oneose: () => {
+          console.log('DelegationNotifier: subscription ready (EOSE)');
+        },
+      }
+    );
+
+    this.subscriptions.push(sub);
+  }
+
+  async handleEvent(event) {
+    try {
+      const dTag = event.tags.find(t => t[0] === 'd')?.[1];
+      const ownerPubkey = event.pubkey;
+
+      // Try to decrypt manifest content
+      let manifest = null;
+      if (event.content) {
+        try {
+          const { nip44 } = await loadNostrLibs();
+          const secret = getMemorySecret();
+          let decrypted;
+
+          if (secret) {
+            const conversationKey = nip44.v2.utils.getConversationKey(secret, ownerPubkey);
+            decrypted = nip44.v2.decrypt(event.content, conversationKey);
+          } else if (window.nostr?.nip44?.decrypt) {
+            decrypted = await window.nostr.nip44.decrypt(ownerPubkey, event.content);
+          }
+
+          if (decrypted) {
+            manifest = JSON.parse(decrypted);
+          }
+        } catch (err) {
+          console.warn('DelegationNotifier: could not decrypt manifest:', err.message);
+        }
+      }
+
+      // Also check for legacy per-record tags
+      const recordId = event.tags.find(t => t[0] === 'record')?.[1];
+      const action = event.tags.find(t => t[0] === 'action')?.[1] || 'manifest';
+
+      console.log(`DelegationNotifier: received ${action} from ${ownerPubkey.slice(0, 12)}...`);
+
+      if (this.onDelegation) {
+        this.onDelegation({
+          action: manifest ? 'manifest' : action,
+          manifest,
+          recordId,
+          dTag,
+          ownerPubkey,
+          timestamp: event.created_at,
+        });
+      }
+    } catch (err) {
+      console.error('DelegationNotifier: failed to process event:', err);
+    }
+  }
+
+  stopSubscription() {
+    for (const sub of this.subscriptions) {
+      sub.close();
+    }
+    this.subscriptions = [];
+    this.onDelegation = null;
+    console.log('DelegationNotifier: stopped subscription');
+  }
+
+  destroy() {
+    this.stopSubscription();
+    if (this.relayPool) {
+      this.relayPool.close(DELEGATION_RELAYS);
+      this.relayPool = null;
+    }
+  }
+}

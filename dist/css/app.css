@@ -1,11 +1,12 @@
 /* Theme tokens */
 :root {
-  --bg: #f4f4f4;
+  --bg: #f0f2f5;
   --surface: #fff;
   --border: #e5e5e5;
   --border-strong: #0f172a;
   --muted: #666;
   --text: #111;
+  --accent: #3b82f6;
   --shadow-soft: 0 6px 18px rgba(15, 23, 42, 0.2);
   --shadow-strong: 0 10px 24px rgba(15, 23, 42, 0.25);
   --radius-sm: 6px;
@@ -20,7 +21,10 @@
 body {
   margin: 0 auto;
   padding: 2rem;
-  max-width: 640px;
+  max-width: 1100px;
+}
+h1, h2, h3 {
+  color: #1e293b;
 }
 h1 {
   margin-bottom: 0.25rem;
@@ -115,6 +119,28 @@ a {
   transform: translateY(-1px);
   box-shadow: var(--shadow-strong);
 }
+
+/* Sync status ring indicators */
+.avatar-chip.sync-status-synced {
+  box-shadow: 0 0 0 3px #22c55e, var(--shadow-soft); /* green */
+}
+.avatar-chip.sync-status-unsynced {
+  box-shadow: 0 0 0 3px #f97316, var(--shadow-soft); /* orange */
+}
+.avatar-chip.sync-status-syncing {
+  box-shadow: 0 0 0 3px #3b82f6, var(--shadow-soft); /* blue */
+  animation: sync-pulse 1.5s ease-in-out infinite;
+}
+@keyframes sync-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px #3b82f6, var(--shadow-soft); }
+  50% { box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.4), var(--shadow-soft); }
+}
+.avatar-chip.sync-status-synced:hover,
+.avatar-chip.sync-status-unsynced:hover,
+.avatar-chip.sync-status-syncing:hover {
+  transform: translateY(-1px);
+}
+
 .avatar-chip img {
   width: 100%;
   height: 100%;
@@ -188,7 +214,10 @@ a {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  max-width: 820px;
+  max-width: 640px;
+}
+.todo-list-view {
+  max-width: 640px;
 }
 .hero-input-wrapper {
   width: 100%;
@@ -297,12 +326,12 @@ summary::-webkit-details-marker {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  background: #f3f0ff;
-  border: 1px solid #d4c9ff;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
   border-radius: 999px;
   padding: 0.1rem 0.5rem;
   font-size: 0.75rem;
-  color: #5b4b8a;
+  color: #1e40af;
 }
 .tag-chip .remove-tag {
   cursor: pointer;
@@ -356,9 +385,9 @@ summary::-webkit-details-marker {
   cursor: pointer;
 }
 .tag-filter-bar .tag-chip.active {
-  background: #5b4b8a;
+  background: #1e40af;
   color: #fff;
-  border-color: #5b4b8a;
+  border-color: #1e40af;
 }
 .tag-filter-bar .clear-filters {
   font-size: 0.8rem;
@@ -483,8 +512,8 @@ summary::-webkit-details-marker {
 .auth-extension:active:not(:disabled),
 .auth-keyteleport:hover:not(:disabled),
 .auth-keyteleport:active:not(:disabled) {
-  background: #8b5cf6;
-  border-color: #8b5cf6;
+  background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
 }
 .auth-advanced {
@@ -752,6 +781,103 @@ summary::-webkit-details-marker {
   border-color: #fca5a5;
   color: #b91c1c;
 }
+/* Connection Details */
+.superbased-connection-details {
+  background: #f8fffe;
+  border: 1px solid #d1fae5;
+  border-radius: 12px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.connection-status.connected {
+  color: #166534;
+}
+.connection-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+}
+.info-row {
+  display: flex;
+  gap: 0.5rem;
+}
+.info-label {
+  color: #666;
+  min-width: 70px;
+}
+.info-value {
+  color: #333;
+  word-break: break-all;
+}
+.info-npub {
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+.connection-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+.connection-actions .auth-option {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+.auth-option.danger {
+  background: transparent;
+  border: 1px solid #fca5a5;
+  color: #b91c1c;
+}
+.auth-option.danger:hover {
+  background: #fee2e2;
+}
+
+/* Quick Connect */
+.superbased-quick-connect {
+  margin-bottom: 1rem;
+}
+.otherstuff-connect {
+  width: 100%;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: white;
+  font-weight: 600;
+  padding: 0.85rem 1rem;
+  border: none;
+}
+.otherstuff-connect:hover {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+}
+.quick-connect-divider {
+  text-align: center;
+  color: #999;
+  font-size: 0.8rem;
+  margin: 1rem 0 0.5rem;
+  position: relative;
+}
+.quick-connect-divider::before,
+.quick-connect-divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 30%;
+  height: 1px;
+  background: #ddd;
+}
+.quick-connect-divider::before {
+  left: 0;
+}
+.quick-connect-divider::after {
+  right: 0;
+}
+
 .superbased-sync-status {
   margin-top: 1.5rem;
   padding-top: 1rem;
@@ -762,4 +888,655 @@ summary::-webkit-details-marker {
   font-size: 0.85rem;
   color: #666;
   margin-bottom: 0.75rem;
+}
+
+/* ===========================================
+   Agent Connect Modal
+   =========================================== */
+
+.agent-connect-modal {
+  max-width: 460px;
+  text-align: left;
+}
+.agent-connect-modal h2 {
+  text-align: center;
+}
+.agent-connect-modal > p {
+  text-align: center;
+  margin-bottom: 1rem;
+}
+.agent-connect-content {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 12px;
+  padding: 1rem;
+}
+.agent-config-json {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  overflow-x: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.agent-config-json code {
+  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+.copy-button {
+  display: block;
+  width: 100%;
+  padding: 0.6rem 1rem;
+  margin-bottom: 0.75rem;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.copy-button:hover {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+}
+.copy-button.copied {
+  background: #22c55e;
+}
+
+/* ===========================================
+   Delegation UI Styles
+   =========================================== */
+
+.delegations-modal {
+  max-width: 460px;
+  text-align: left;
+}
+.delegations-modal h2 {
+  text-align: center;
+}
+.delegations-modal > p {
+  text-align: center;
+}
+
+.delegation-section {
+  margin-bottom: 1.5rem;
+}
+
+.delegation-section h3 {
+  font-size: 0.85rem;
+  color: #666;
+  margin: 0 0 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.delegation-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.delegation-form input[type="text"] {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-family: monospace;
+  font-size: 0.85rem;
+}
+
+.permission-checkboxes {
+  display: flex;
+  gap: 1rem;
+}
+
+.permission-checkboxes label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #444;
+}
+
+.permission-checkboxes input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+.delegation-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.delegation-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem;
+  background: #f9f9f9;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+}
+
+.delegation-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.delegation-npub {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.delegation-perms {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.perm-badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  background: var(--accent);
+  color: white;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.perm-badge.read {
+  background: #3b82f6;
+}
+
+.perm-badge.write {
+  background: #22c55e;
+}
+
+.revoke-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  background: #fff;
+  color: #dc2626;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.revoke-btn:hover {
+  background: #fee2e2;
+  border-color: #dc2626;
+}
+
+.empty-delegations {
+  color: #666;
+  font-style: italic;
+  text-align: center;
+  padding: 1rem;
+  background: transparent;
+  border: none;
+}
+
+/* Assigned-to field in todo edit form */
+.assigned-to-field input {
+  font-family: monospace;
+  font-size: 0.85rem;
+}
+
+.assigned-to-hint {
+  font-size: 0.75rem;
+  color: #666;
+  margin-top: 0.25rem;
+}
+
+/* Delegated todos indicator */
+.delegated-badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  background: #0ea5e9;
+  color: white;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.loading {
+  text-align: center;
+  color: #666;
+  padding: 1rem;
+}
+
+/* =========================================
+   View Switcher
+   ========================================= */
+.view-switcher {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+.view-switcher button {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+  border-radius: 0;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.view-switcher button:hover {
+  background: #e2e8f0;
+}
+.view-switcher button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* =========================================
+   Kanban Board
+   ========================================= */
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+.kanban-column {
+  background: #e8ebf0;
+  border-radius: var(--radius-md);
+  padding: 0.5rem;
+  min-height: 120px;
+  transition: background 150ms ease;
+}
+.kanban-column.drag-over {
+  background: #d0d8e8;
+}
+.kanban-column-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.kanban-column-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: #334155;
+}
+.kanban-column-count {
+  background: var(--surface);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  color: var(--muted);
+}
+.kanban-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.kanban-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  cursor: grab;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  transition: box-shadow 150ms ease, transform 100ms ease;
+}
+.kanban-card:active {
+  cursor: grabbing;
+  box-shadow: var(--shadow-soft);
+  transform: rotate(2deg);
+}
+.kanban-card-title {
+  font-weight: 500;
+  font-size: 0.9rem;
+  margin-bottom: 0.35rem;
+}
+.kanban-card-meta {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+.kanban-card-actions {
+  margin-top: 0.4rem;
+  display: flex;
+  gap: 0.3rem;
+}
+.kanban-action-btn {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.kanban-action-btn:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.kanban-empty {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.8rem;
+  padding: 1rem 0.5rem;
+}
+
+/* =========================================
+   Calendar View
+   ========================================= */
+.calendar-container {
+  display: grid;
+  grid-template-columns: 1fr 260px;
+  gap: 1rem;
+  align-items: start;
+}
+.calendar-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.calendar-nav button {
+  padding: 0.3rem 0.7rem;
+  font-size: 0.9rem;
+}
+.calendar-today-btn {
+  margin-left: auto;
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.calendar-today-btn:hover {
+  background: var(--accent);
+  color: #fff;
+}
+.calendar-month-label {
+  font-weight: 600;
+  font-size: 1.1rem;
+  color: #1e293b;
+}
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.calendar-header-row {
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  margin-bottom: 0;
+}
+.calendar-day-header {
+  background: #e2e8f0;
+  text-align: center;
+  padding: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+}
+.calendar-cell {
+  background: var(--surface);
+  min-height: 80px;
+  padding: 0.3rem;
+  cursor: pointer;
+  transition: background 100ms ease;
+  position: relative;
+}
+.calendar-cell:hover {
+  background: #f8fafc;
+}
+.calendar-cell.other-month {
+  background: #f9fafb;
+}
+.calendar-cell.other-month .calendar-day-number {
+  color: #cbd5e1;
+}
+.calendar-cell.is-today {
+  background: #eff6ff;
+}
+.calendar-cell.is-today .calendar-day-number {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 50%;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.calendar-cell.is-selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.calendar-day-number {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #334155;
+  display: inline-block;
+  margin-bottom: 0.2rem;
+}
+.calendar-cell-todos {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.calendar-todo-chip {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: grab;
+  line-height: 1.3;
+}
+.calendar-todo-chip.priority-rock {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.calendar-todo-chip.priority-pebble {
+  background: #fef3c7;
+  color: #92400e;
+}
+.calendar-todo-chip.priority-sand {
+  background: #dbeafe;
+  color: #1e40af;
+}
+.calendar-more {
+  font-size: 0.6rem;
+  color: var(--muted);
+  padding: 0.1rem 0.3rem;
+}
+
+/* Calendar Sidebar */
+.calendar-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.calendar-detail,
+.calendar-unscheduled {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem;
+}
+.calendar-detail h3,
+.calendar-unscheduled h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+.calendar-detail-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.calendar-detail-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.5rem;
+  background: transparent;
+  border: none;
+}
+.calendar-detail-list li.empty-state {
+  background: transparent;
+  border: none;
+  padding: 0.5rem;
+}
+.calendar-unscheduled-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* =========================================
+   Responsive: Kanban + Calendar
+   ========================================= */
+@media (max-width: 700px) {
+  .kanban-board {
+    grid-template-columns: 1fr;
+  }
+  .calendar-container {
+    grid-template-columns: 1fr;
+  }
+  .calendar-cell {
+    min-height: 50px;
+  }
+  .calendar-todo-chip {
+    font-size: 0.55rem;
+  }
+}
+
+/* Todo update flash animation */
+@keyframes todo-saved-flash {
+  0% { background-color: #d1fae5; }
+  100% { background-color: var(--surface); }
+}
+li.todo-saved {
+  animation: todo-saved-flash 600ms ease-out;
+}
+
+/* DER Delegate UI */
+.delegate-badge {
+  background: #a78bfa !important;
+  color: #fff !important;
+  font-size: 0.65rem;
+}
+
+.record-delegates {
+  margin-top: 0.5rem;
+}
+
+.record-delegates label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+  display: block;
+}
+
+.delegate-list-compact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.delegate-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-family: monospace;
+}
+
+.delegate-chip.read {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.delegate-chip.write {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.delegate-chip .badge-sm {
+  font-size: 0.6rem;
+  padding: 0 0.2rem;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.1);
+}
+
+.delegate-chip .remove-tag {
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.delegate-chip .remove-tag:hover {
+  opacity: 1;
+}
+
+.add-delegate-inline {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-top: 0.25rem;
+  width: 100%;
+}
+
+.delegate-input-sm {
+  flex: 1;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: monospace;
+}
+
+.delegate-perm-select {
+  padding: 0.2rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.delegate-add-btn {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.delegate-add-btn:hover {
+  opacity: 0.9;
 }

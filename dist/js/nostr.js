@@ -7,6 +7,7 @@ import {
   cacheProfile,
   getCachedProfile,
 } from './secure-store.js';
+import { getOrCreateInstanceKey } from './keyteleport.js';
 
 export const LOGIN_KIND = 27235;
 export const AUTH_KIND = 22242; // NIP-42 AUTH kind
@@ -370,39 +371,113 @@ export function hasEphemeralSecret() {
 
 // Export nsec for ephemeral accounts
 export async function exportNsec() {
+  const { nip19 } = await loadNostrLibs();
+
+  // Check secure storage first (current method)
+  const creds = await getStoredCredentials();
+  if (creds?.secretHex && (creds.method === 'ephemeral' || creds.method === 'secret')) {
+    const secret = hexToBytes(creds.secretHex);
+    return nip19.nsecEncode(secret);
+  }
+
+  // Fallback to legacy localStorage
   const stored = localStorage.getItem(STORAGE_KEYS.EPHEMERAL_SECRET);
   if (!stored) return null;
-  const { nip19 } = await loadNostrLibs();
   const secret = hexToBytes(stored);
   return nip19.nsecEncode(secret);
 }
 
-// Generate login QR URL
+// Generate login QR URL with encrypted nsec
+// Encrypts the nsec using the app's hardcoded key (same as Key Teleport)
+// so the nsec is never exposed in plaintext in the URL
 export async function generateLoginQrUrl() {
   const nsec = await exportNsec();
   if (!nsec) return null;
-  return `${window.location.origin}/#code=${nsec}`;
+
+  const { nip44 } = await loadNostrLibs();
+  const instanceKey = await getOrCreateInstanceKey();
+
+  // Encrypt nsec to the app's public key using NIP-44
+  // This way the nsec is protected in transit - only this app can decrypt it
+  const conversationKey = nip44.v2.utils.getConversationKey(
+    hexToBytes(instanceKey.privateKeyHex),
+    instanceKey.publicKeyHex
+  );
+  const encryptedNsec = nip44.v2.encrypt(nsec, conversationKey);
+
+  // Use URL-safe base64 encoding
+  const encoded = btoa(encryptedNsec).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+  return `${window.location.origin}/#login=${encoded}`;
 }
 
-// Parse fragment login (nsec in URL hash)
+// Parse fragment login (encrypted nsec in URL hash)
+// Supports: #login=<encrypted> (new secure format)
+// Legacy:   #code=<nsec> (deprecated, still supported for backwards compat)
 export async function parseFragmentLogin() {
   const hash = window.location.hash;
-  if (!hash.startsWith('#code=')) return null;
 
-  const nsec = hash.slice(6);
-  if (!nsec || !nsec.startsWith('nsec1')) {
+  // New encrypted format: #login=<encrypted>
+  if (hash.startsWith('#login=')) {
+    const encoded = hash.slice(7); // Remove '#login='
+    if (!encoded) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return null;
+    }
+
+    // Clear URL immediately (don't leave encrypted data in history)
     history.replaceState(null, '', window.location.pathname + window.location.search);
-    return null;
+
+    try {
+      const { nip19, nip44 } = await loadNostrLibs();
+      const instanceKey = await getOrCreateInstanceKey();
+
+      // Decode URL-safe base64
+      const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+      const encryptedNsec = atob(base64);
+
+      // Decrypt using app's key
+      const conversationKey = nip44.v2.utils.getConversationKey(
+        hexToBytes(instanceKey.privateKeyHex),
+        instanceKey.publicKeyHex
+      );
+      const nsec = nip44.v2.decrypt(encryptedNsec, conversationKey);
+
+      if (!nsec || !nsec.startsWith('nsec1')) {
+        console.error('Decrypted value is not a valid nsec');
+        return null;
+      }
+
+      const secretBytes = decodeNsec(nip19, nsec);
+      const secretHex = bytesToHex(secretBytes);
+      localStorage.setItem(STORAGE_KEYS.EPHEMERAL_SECRET, secretHex);
+
+      return 'ephemeral';
+    } catch (err) {
+      console.error('Failed to decrypt login QR:', err);
+      return null;
+    }
   }
 
-  history.replaceState(null, '', window.location.pathname + window.location.search);
+  // Legacy format: #code=<nsec> (deprecated but still supported)
+  if (hash.startsWith('#code=')) {
+    const nsec = hash.slice(6);
+    if (!nsec || !nsec.startsWith('nsec1')) {
+      history.replaceState(null, '', window.location.pathname + window.location.search);
+      return null;
+    }
 
-  const { nip19 } = await loadNostrLibs();
-  const secretBytes = decodeNsec(nip19, nsec);
-  const secretHex = bytesToHex(secretBytes);
-  localStorage.setItem(STORAGE_KEYS.EPHEMERAL_SECRET, secretHex);
+    history.replaceState(null, '', window.location.pathname + window.location.search);
 
-  return 'ephemeral';
+    const { nip19 } = await loadNostrLibs();
+    const secretBytes = decodeNsec(nip19, nsec);
+    const secretHex = bytesToHex(secretBytes);
+    localStorage.setItem(STORAGE_KEYS.EPHEMERAL_SECRET, secretHex);
+
+    return 'ephemeral';
+  }
+
+  return null;
 }
 
 // ===========================================
@@ -459,6 +534,32 @@ export async function decryptFromSelf(ciphertext) {
   return nip44.v2.decrypt(ciphertext, conversationKey);
 }
 
+// Decrypt data from a specific sender using NIP-44
+// Used for decrypting delegate_payloads (encrypted by owner to delegate)
+export async function decryptFromSender(ciphertext, senderPubkeyHex) {
+  const { nip44, nip19 } = await loadNostrLibs();
+  const secret = getMemorySecret();
+
+  // Convert npub to hex if needed
+  let pubkeyHex = senderPubkeyHex;
+  if (senderPubkeyHex.startsWith('npub1')) {
+    const decoded = nip19.decode(senderPubkeyHex);
+    pubkeyHex = decoded.data;
+  }
+
+  // For extension users
+  if (!secret) {
+    if (window.nostr?.nip44?.decrypt) {
+      return window.nostr.nip44.decrypt(pubkeyHex, ciphertext);
+    }
+    throw new Error('No decryption key available. Please log in first.');
+  }
+
+  // Use nostr-tools nip44 for ephemeral/secret users
+  const conversationKey = nip44.v2.utils.getConversationKey(secret, pubkeyHex);
+  return nip44.v2.decrypt(ciphertext, conversationKey);
+}
+
 // Encrypt a JSON object
 export async function encryptObject(obj) {
   const plaintext = JSON.stringify(obj);
@@ -469,6 +570,46 @@ export async function encryptObject(obj) {
 export async function decryptObject(ciphertext) {
   const plaintext = await decryptFromSelf(ciphertext);
   return JSON.parse(plaintext);
+}
+
+// ===========================================
+// NIP-44 Encryption to specific pubkey (for delegation)
+// ===========================================
+
+/**
+ * Encrypt plaintext to a specific recipient pubkey
+ * Used for creating delegate-encrypted copies
+ */
+export async function encryptToRecipient(plaintext, recipientPubkeyHex) {
+  const { nip44, nip19 } = await loadNostrLibs();
+  const secret = getMemorySecret();
+
+  // Convert npub to hex if needed
+  let pubkeyHex = recipientPubkeyHex;
+  if (recipientPubkeyHex.startsWith('npub1')) {
+    const decoded = nip19.decode(recipientPubkeyHex);
+    pubkeyHex = decoded.data;
+  }
+
+  // For extension users
+  if (!secret) {
+    if (window.nostr?.nip44?.encrypt) {
+      return window.nostr.nip44.encrypt(pubkeyHex, plaintext);
+    }
+    throw new Error('No encryption key available. Please log in first.');
+  }
+
+  // Use nostr-tools nip44 for ephemeral/secret users
+  const conversationKey = nip44.v2.utils.getConversationKey(secret, pubkeyHex);
+  return nip44.v2.encrypt(plaintext, conversationKey);
+}
+
+/**
+ * Encrypt a JSON object to a specific recipient
+ */
+export async function encryptObjectToRecipient(obj, recipientPubkeyHex) {
+  const plaintext = JSON.stringify(obj);
+  return encryptToRecipient(plaintext, recipientPubkeyHex);
 }
 
 // ===========================================

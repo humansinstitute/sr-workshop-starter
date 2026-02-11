@@ -457,7 +457,7 @@ export async function formatTodosForDER(storedTodos) {
     } catch { /* ignore */ }
 
     // Encrypt payload to owner (self) using NIP-44
-    const encrypted_payload = await encryptToSelf(todo.payload);
+    const encrypted_data = await encryptToSelf(todo.payload);
 
     // Encrypt to each delegate
     const delegate_payloads = {};
@@ -477,7 +477,7 @@ export async function formatTodosForDER(storedTodos) {
     const record = {
       record_id: `todo_${todo.id}`,
       collection: 'todos',
-      encrypted_payload,
+      encrypted_data,
       metadata: {
         local_id: todo.id,
         owner: todo.owner,
@@ -509,7 +509,7 @@ export async function formatTodosForDER(storedTodos) {
 export async function parseDERRecord(record) {
   const schemaVersion = record.metadata?.schema_version || 0;
 
-  if (schemaVersion >= 1 && record.encrypted_payload) {
+  if (schemaVersion >= 1 && record.encrypted_data) {
     // v1 DER format — decrypt
     try {
       const myPubkey = getMemoryPubkey();
@@ -517,7 +517,7 @@ export async function parseDERRecord(record) {
 
       // Try decrypt as owner first
       try {
-        decryptedPayload = await decryptFromSelf(record.encrypted_payload);
+        decryptedPayload = await decryptFromSelf(record.encrypted_data);
       } catch (ownerErr) {
         // Not the owner — try as delegate
         if (myPubkey && record.delegate_payloads?.[myPubkey]) {
@@ -563,7 +563,7 @@ function extractIdFromRecordId(recordId) {
 }
 
 /**
- * v0 legacy record parser (no NIP-44, just JSON)
+ * v0 legacy record parser (plain JSON in encrypted_data)
  * Returns same shape as parseDERRecord for consistency
  */
 function parseRemoteRecordV0(record) {
