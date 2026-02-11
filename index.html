@@ -280,41 +280,16 @@
                         <span class="assigned-to-hint">Delegate must have write permission to update</span>
                       </label>
 
-                      <!-- Per-record delegate management -->
-                      <div class="record-delegates" x-show="$store.app.superbasedConnected">
-                        <label>Record Delegates</label>
-                        <div class="delegate-list-compact">
-                          <template x-for="d in (todo.read_delegates || [])" :key="'r-' + d">
-                            <span class="delegate-chip read">
-                              <span x-text="d.slice(0, 8) + '...'"></span>
-                              <span class="badge-sm">read</span>
-                              <span class="remove-tag" @click="$store.app.removeDelegateFromRecord(todo.id, d)">&times;</span>
+                      <!-- Shared with (read-only delegate status) -->
+                      <div class="delegate-status-section" x-show="$store.app.superbasedConnected && [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])].length > 0">
+                        <label>Shared With</label>
+                        <div class="delegate-status-list">
+                          <template x-for="d in [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])]" :key="d">
+                            <span class="delegate-chip-readonly">
+                              <span x-text="$store.app.delegateProfiles[d]?.name || $store.app.delegateProfiles[d]?.npub || d.slice(0,8) + '...'"></span>
+                              <span class="badge-sm" x-text="(todo.write_delegates || []).includes(d) ? 'read+write' : 'read'"></span>
                             </span>
                           </template>
-                          <template x-for="d in (todo.write_delegates || [])" :key="'w-' + d">
-                            <span class="delegate-chip write" x-show="!(todo.read_delegates || []).includes(d)">
-                              <span x-text="d.slice(0, 8) + '...'"></span>
-                              <span class="badge-sm">write</span>
-                              <span class="remove-tag" @click="$store.app.removeDelegateFromRecord(todo.id, d)">&times;</span>
-                            </span>
-                          </template>
-                          <div class="add-delegate-inline" x-data="{ delegateInput: '', delegatePerm: 'read' }">
-                            <input
-                              type="text"
-                              x-model="delegateInput"
-                              placeholder="hex pubkey..."
-                              class="delegate-input-sm"
-                            />
-                            <select x-model="delegatePerm" class="delegate-perm-select">
-                              <option value="read">Read</option>
-                              <option value="write">Write</option>
-                            </select>
-                            <button
-                              type="button"
-                              class="delegate-add-btn"
-                              @click="if(delegateInput.trim()) { $store.app.addDelegateToRecord(todo.id, delegateInput.trim(), delegatePerm); delegateInput = ''; }"
-                            >Add</button>
-                          </div>
                         </div>
                       </div>
 
@@ -759,7 +734,7 @@
             <template x-for="delegation in $store.app.delegations" :key="delegation.id">
               <li class="delegation-item">
                 <div class="delegation-info">
-                  <span class="delegation-npub" x-text="$store.app.formatNpubShort(delegation.delegate_pubkey)"></span>
+                  <span class="delegation-npub" x-text="$store.app.delegateProfiles[delegation.delegate_pubkey]?.name || $store.app.delegateProfiles[delegation.delegate_pubkey]?.npub || $store.app.formatNpubShort(delegation.delegate_pubkey)"></span>
                   <span class="delegation-perms">
                     <template x-for="perm in delegation.permissions" :key="perm">
                       <span class="perm-badge" :class="perm" x-text="perm"></span>

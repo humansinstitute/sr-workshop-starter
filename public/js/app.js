@@ -1,6 +1,6 @@
 // Main Alpine.js application
 import Alpine from 'https://esm.sh/alpinejs@3.14.8';
-import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState, addDelegateToTodo, removeDelegateFromTodo, getTodoDelegates, migrateToV1 } from './db.js';
+import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState, addDelegateToTodo, removeDelegateFromTodo, migrateToV1 } from './db.js';
 import {
   signLoginEvent,
   getPubkeyFromEvent,
@@ -118,6 +118,7 @@ Alpine.store('app', {
   delegationError: null,
   isLoadingDelegations: false,
   delegatedTodos: [],
+  delegateProfiles: {},
 
   // View state
   currentView: 'list', // 'list' | 'kanban' | 'calendar'
@@ -427,6 +428,17 @@ Alpine.store('app', {
 
     this.todos = await getTodosByOwner(this.session.npub);
 
+    // Resolve delegate profiles for all todos
+    const seenPubkeys = new Set();
+    for (const todo of this.todos) {
+      for (const d of [...(todo.read_delegates || []), ...(todo.write_delegates || [])]) {
+        if (!seenPubkeys.has(d)) {
+          seenPubkeys.add(d);
+          this.resolveDelegateProfile(d);
+        }
+      }
+    }
+
     // Check SuperBased connection after todos are loaded
     if (!this.superbasedClient) {
       await this.checkSuperBasedConnection();
@@ -436,9 +448,19 @@ Alpine.store('app', {
   async addTodo() {
     if (!this.newTodoTitle.trim() || !this.session?.npub) return;
 
+    // Collect current app-wide delegates from existing todos
+    const readDelegates = new Set();
+    const writeDelegates = new Set();
+    for (const todo of this.todos) {
+      for (const d of (todo.read_delegates || [])) readDelegates.add(d);
+      for (const d of (todo.write_delegates || [])) writeDelegates.add(d);
+    }
+
     await createTodo({
       title: this.newTodoTitle.trim(),
       owner: this.session.npub,
+      read_delegates: [...readDelegates],
+      write_delegates: [...writeDelegates],
     });
 
     this.newTodoTitle = '';
@@ -1112,6 +1134,12 @@ Alpine.store('app', {
     try {
       const result = await this.superbasedClient.listDelegations();
       this.delegations = result.delegations || [];
+      // Resolve profiles for each delegate
+      for (const d of this.delegations) {
+        if (d.delegate_pubkey) {
+          this.resolveDelegateProfile(d.delegate_pubkey);
+        }
+      }
     } catch (err) {
       console.error('Failed to load delegations:', err);
       this.delegationError = err.message;
@@ -1245,47 +1273,26 @@ Alpine.store('app', {
     return (permissions || []).join(', ');
   },
 
-  // Per-record delegate management
-  async manageTodoDelegates(todoId) {
+  async resolveDelegateProfile(hexPubkey) {
+    if (!hexPubkey || this.delegateProfiles[hexPubkey]) return;
     try {
-      const delegates = await getTodoDelegates(todoId);
-      return delegates;
-    } catch (err) {
-      console.error('Failed to get todo delegates:', err);
-      return { read_delegates: [], write_delegates: [] };
-    }
-  },
-
-  async addDelegateToRecord(todoId, pubkeyHex, permission) {
-    try {
-      await addDelegateToTodo(todoId, pubkeyHex, permission);
-      await this.loadTodos();
-
-      // Trigger sync to push updated delegate payloads
-      this.hasUnsyncedChanges = true;
-      this.lastLocalChangeTime = Date.now();
-      if (this.superbasedClient && !this.isSyncing) {
-        this.syncNow();
+      const { nip19 } = await loadNostrLibs();
+      const npub = nip19.npubEncode(hexPubkey);
+      // Set npub immediately so UI has something to show
+      this.delegateProfiles[hexPubkey] = { name: null, npub, picture: null };
+      const profile = await fetchProfile(hexPubkey);
+      if (profile) {
+        this.delegateProfiles[hexPubkey] = {
+          name: profile.display_name || profile.name || null,
+          npub,
+          picture: profile.picture || null,
+        };
       }
     } catch (err) {
-      console.error('Failed to add delegate to record:', err);
+      console.error('Failed to resolve delegate profile:', hexPubkey.slice(0, 8), err.message);
     }
   },
 
-  async removeDelegateFromRecord(todoId, pubkeyHex) {
-    try {
-      await removeDelegateFromTodo(todoId, pubkeyHex);
-      await this.loadTodos();
-
-      this.hasUnsyncedChanges = true;
-      this.lastLocalChangeTime = Date.now();
-      if (this.superbasedClient && !this.isSyncing) {
-        this.syncNow();
-      }
-    } catch (err) {
-      console.error('Failed to remove delegate from record:', err);
-    }
-  },
 });
 
 // Todo item component
@@ -1323,6 +1330,11 @@ Alpine.data('todoItem', (todo) => ({
   async save() {
     const store = Alpine.store('app');
     try {
+      // Track old assigned_to for delegate cleanup
+      const storeTodo = store.todos.find(t => t.id === this.localTodo.id);
+      const oldAssignedTo = storeTodo?.assigned_to || null;
+      const newAssignedTo = this.localTodo.assigned_to || null;
+
       await updateTodo(this.localTodo.id, {
         title: this.localTodo.title,
         description: this.localTodo.description,
@@ -1330,8 +1342,32 @@ Alpine.data('todoItem', (todo) => ({
         state: this.localTodo.state,
         scheduled_for: this.localTodo.scheduled_for || null,
         tags: this.localTodo.tags,
-        assigned_to: this.localTodo.assigned_to || null,
+        assigned_to: newAssignedTo,
       });
+
+      // Auto-delegate based on assigned_to changes
+      if (newAssignedTo !== oldAssignedTo) {
+        const { nip19 } = await loadNostrLibs();
+
+        // Remove old assignee's delegation
+        if (oldAssignedTo) {
+          let oldHex = oldAssignedTo;
+          if (oldHex.startsWith('npub1')) {
+            oldHex = nip19.decode(oldHex).data;
+          }
+          await removeDelegateFromTodo(this.localTodo.id, oldHex);
+        }
+
+        // Add new assignee's delegation (write implies read)
+        if (newAssignedTo) {
+          let newHex = newAssignedTo;
+          if (newHex.startsWith('npub1')) {
+            newHex = nip19.decode(newHex).data;
+          }
+          await addDelegateToTodo(this.localTodo.id, newHex, 'write');
+        }
+      }
+
       const savedId = this.localTodo.id;
       store.stopEditing();
 

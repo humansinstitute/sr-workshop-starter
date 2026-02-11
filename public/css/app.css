@@ -1449,22 +1449,42 @@ li.todo-saved {
   font-size: 0.65rem;
 }
 
-.record-delegates {
+.delegate-status-section {
   margin-top: 0.5rem;
 }
 
-.record-delegates label {
+.delegate-status-section label {
   font-weight: 600;
   font-size: 0.85rem;
   margin-bottom: 0.25rem;
   display: block;
 }
 
-.delegate-list-compact {
+.delegate-status-list {
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+}
+
+.delegate-chip-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  background: #f1f5f9;
+  color: #334155;
+  border: 1px solid #e2e8f0;
+}
+
+.delegate-chip-readonly .badge-sm {
+  font-size: 0.6rem;
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.08);
+  color: #64748b;
 }
 
 .delegate-chip {
@@ -1503,40 +1523,3 @@ li.todo-saved {
   opacity: 1;
 }
 
-.add-delegate-inline {
-  display: flex;
-  gap: 0.25rem;
-  align-items: center;
-  margin-top: 0.25rem;
-  width: 100%;
-}
-
-.delegate-input-sm {
-  flex: 1;
-  padding: 0.2rem 0.4rem;
-  font-size: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  font-family: monospace;
-}
-
-.delegate-perm-select {
-  padding: 0.2rem;
-  font-size: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-}
-
-.delegate-add-btn {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.75rem;
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-
-.delegate-add-btn:hover {
-  opacity: 0.9;
-}
