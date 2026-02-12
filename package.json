@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "description": "Local-first todo app with Nostr auth and encrypted IndexedDB storage",
   "scripts": {
-    "setup": "bun install",
+    "setup": "bun install && bun run build",
     "dev": "bunx vite",
     "build": "bunx vite build",
     "preview": "bunx vite preview",
