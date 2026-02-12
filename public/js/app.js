@@ -18,6 +18,9 @@ import {
   tryAutoLoginFromStorage,
   fetchProfile,
   loadNostrLibs,
+  getMemorySecret,
+  getMemoryPubkey,
+  bytesToHex,
   STORAGE_KEYS,
 } from './nostr.js';
 import {
@@ -74,7 +77,6 @@ Alpine.store('app', {
   showAvatarMenu: false,
   showQrModal: false,
   showProfileModal: false,
-  editingTodoId: null,
   justSavedTodoId: null,
 
   // Key Teleport state
@@ -94,6 +96,7 @@ Alpine.store('app', {
   superbasedConnected: false,
   isSavingSuperBased: false,
   isSyncing: false,
+  useCvmSync: localStorage.getItem('use_cvm_sync') === 'true',
 
   // Agent Connect
   showAgentConnectModal: false,
@@ -120,11 +123,8 @@ Alpine.store('app', {
   delegatedTodos: [],
   delegateProfiles: {},
 
-  // View state
-  currentView: 'list', // 'list' | 'kanban' | 'calendar'
-  calendarYear: new Date().getFullYear(),
-  calendarMonth: new Date().getMonth(),
-  calendarSelectedDate: null,
+  // Edit modal
+  editModalTodoId: null,
 
   // New todo input
   newTodoTitle: '',
@@ -164,66 +164,6 @@ Alpine.store('app', {
     return Array.from(tagSet).sort();
   },
 
-  get todosByState() {
-    const result = { new: [], ready: [], in_progress: [], done: [] };
-    let todos = this.todos.filter(t => !t.deleted);
-    if (this.filterTags.length > 0) {
-      todos = todos.filter(t => {
-        const todoTags = parseTags(t.tags);
-        return this.filterTags.some(ft => todoTags.includes(ft.toLowerCase()));
-      });
-    }
-    for (const t of todos) {
-      if (result[t.state]) result[t.state].push(t);
-    }
-    return result;
-  },
-
-  get calendarMonthLabel() {
-    const d = new Date(this.calendarYear, this.calendarMonth, 1);
-    return d.toLocaleString('default', { month: 'long', year: 'numeric' });
-  },
-
-  get calendarDays() {
-    const year = this.calendarYear;
-    const month = this.calendarMonth;
-    const firstDay = new Date(year, month, 1).getDay();
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    const daysInPrevMonth = new Date(year, month, 0).getDate();
-    const cells = [];
-    // Previous month padding
-    for (let i = firstDay - 1; i >= 0; i--) {
-      const day = daysInPrevMonth - i;
-      const d = new Date(year, month - 1, day);
-      cells.push({ date: this._formatDate(d), day, isCurrentMonth: false });
-    }
-    // Current month
-    for (let day = 1; day <= daysInMonth; day++) {
-      const d = new Date(year, month, day);
-      cells.push({ date: this._formatDate(d), day, isCurrentMonth: true });
-    }
-    // Next month padding to fill 6 rows
-    const remaining = 42 - cells.length;
-    for (let day = 1; day <= remaining; day++) {
-      const d = new Date(year, month + 1, day);
-      cells.push({ date: this._formatDate(d), day, isCurrentMonth: false });
-    }
-    return cells;
-  },
-
-  get scheduledTodosByDate() {
-    const map = {};
-    const todos = this.todos.filter(t => !t.deleted && t.scheduled_for);
-    for (const t of todos) {
-      if (!map[t.scheduled_for]) map[t.scheduled_for] = [];
-      map[t.scheduled_for].push(t);
-    }
-    return map;
-  },
-
-  get unscheduledTodos() {
-    return this.todos.filter(t => !t.deleted && !t.scheduled_for && t.state !== 'done');
-  },
 
   // Sync status: 'disconnected' | 'syncing' | 'unsynced' | 'synced'
   get syncStatus() {
@@ -510,6 +450,7 @@ Alpine.store('app', {
   },
 
   async deleteTodoItem(id) {
+    this.closeEditModal();
     await deleteTodo(id);
     await this.loadTodos();
 
@@ -540,78 +481,17 @@ Alpine.store('app', {
     return this.filterTags.includes(tag.toLowerCase());
   },
 
-  // Calendar methods
-  _formatDate(d) {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
+  // Edit modal methods
+  openEditModal(todoId) {
+    this.editModalTodoId = todoId;
   },
 
-  todosForDate(dateStr) {
-    return this.scheduledTodosByDate[dateStr] || [];
-  },
-
-  prevMonth() {
-    if (this.calendarMonth === 0) {
-      this.calendarMonth = 11;
-      this.calendarYear--;
-    } else {
-      this.calendarMonth--;
-    }
-  },
-
-  nextMonth() {
-    if (this.calendarMonth === 11) {
-      this.calendarMonth = 0;
-      this.calendarYear++;
-    } else {
-      this.calendarMonth++;
-    }
-  },
-
-  goToToday() {
-    const now = new Date();
-    this.calendarYear = now.getFullYear();
-    this.calendarMonth = now.getMonth();
-    this.calendarSelectedDate = this._formatDate(now);
-  },
-
-  selectDate(dateStr) {
-    this.calendarSelectedDate = this.calendarSelectedDate === dateStr ? null : dateStr;
-  },
-
-  isToday(dateStr) {
-    return dateStr === this._formatDate(new Date());
-  },
-
-  // Drag and drop handlers
-  async handleKanbanDrop(todoId, newState) {
-    const todo = this.todos.find(t => t.id === todoId);
-    if (!todo || todo.state === newState) return;
-    const allowed = ALLOWED_STATE_TRANSITIONS[todo.state] || [];
-    if (!allowed.includes(newState)) return; // silently reject invalid transitions
-    await this.transitionState(todoId, newState);
-  },
-
-  async handleCalendarDrop(todoId, newDate) {
-    await this.updateTodoField(todoId, 'scheduled_for', newDate);
+  closeEditModal() {
+    this.editModalTodoId = null;
   },
 
   toggleArchive() {
     this.showArchive = !this.showArchive;
-  },
-
-  startEditing(id) {
-    this.editingTodoId = id;
-  },
-
-  stopEditing() {
-    this.editingTodoId = null;
-  },
-
-  isEditing(id) {
-    return this.editingTodoId === id;
   },
 
   getTransitions(state) {
@@ -797,11 +677,25 @@ Alpine.store('app', {
     this.showAvatarMenu = false;
     this.agentConfigCopied = false;
 
+    // Decode appNpub to hex pubkey so agents don't need to convert
+    const appNpub = this.superbasedClient?.config?.appNpub || '';
+    let appPubkey = '';
+    if (appNpub) {
+      try {
+        const { nip19 } = await loadNostrLibs();
+        const decoded = nip19.decode(appNpub);
+        appPubkey = decoded.data;
+      } catch (e) {
+        console.warn('Could not decode appNpub:', e);
+      }
+    }
+
     // Build the config JSON
     const config = {
       agentConnectGuide: `${window.location.origin}/agentconnect.md`,
       superbasedURL: this.superbasedClient?.config?.httpUrl || '',
-      appNpub: this.superbasedClient?.config?.appNpub || '',
+      appNpub,
+      appPubkey,
       ownerPubkey: this.session?.pubkey || '',
       ownerNpub: this.session?.npub || '',
     };
@@ -824,6 +718,48 @@ Alpine.store('app', {
 
   // Hardcoded OtherStuff Superbased token for workshop (superbased-sync)
   OTHERSTUFF_TOKEN: 'eyJraW5kIjozMDA3OCwiY3JlYXRlZF9hdCI6MTc3MDgwMDAyMiwidGFncyI6W1siZCIsInN1cGVyYmFzZWQtdG9rZW4iXSxbImFwcCIsIm5wdWIxNTh6M3FyMzh5dmR2bTd3eGR3dWc3bDlnNDc5NmpjcHVma3c0bnF1MnNlZmdqMDhrdjMzczJ3YXgzNSJdLFsic2VydmVyIiwibnB1YjE0Z2s1MHdwd3BldGE4ZmZrNmY0NnhsdDV5NHlwdXNwd3RlMjBlazR0OXltMzl1djh0dGRzNHVuNm11Il0sWyJyZWxheSIsImN2bS5vdGhlcnN0dWZmLmFpIl0sWyJhdHRlc3RhdGlvbiIsImV5SnJhVzVrSWpvek1EQTNPU3dpWTNKbFlYUmxaRjloZENJNk1UYzNNRGd3TURBd01pd2lkR0ZuY3lJNlcxc2laQ0lzSW5OMWNHVnlZbUZ6WldRdGNtVm5hWE4wY21GMGFXOXVJbDBzV3lKelpYSjJaWElpTENKdWNIVmlNVFJuYXpVd2QzQjNjR1YwWVRobVptczJaalEyZUd4ME5YazBlWEIxYzNCM2RHVXlNR1ZyTkhRNWVXMHpPWFYyT0hSMFpITTBkVzQyYlhVaVhTeGJJbTVoYldVaUxDSnpkWEJpWVhObFpDMXplVzVqSWwxZExDSmpiMjUwWlc1MElqb2lJaXdpY0hWaWEyVjVJam9pWVRGak5URXdNR1V5TnpJek1XRmpaR1k1WXpZMlltSTRPR1kzWTJFNFlXWTRZbUU1TmpBell6UmtPV1ExT1Rnek9HRTROalV5T0RrelkyWTJOalEyTXlJc0ltbGtJam9pWTJRd01tWm1ZamRtTTJNeE5qZzBPVGc1WVRZeE9UQTJZamd4TmpjM09URmtNalZrWm1Vd05HUXhObVkwTUdGbU4ySTNOVGszTVdZNVltRTNNVEE0WkNJc0luTnBaeUk2SW1VM09UZG1NbVkzWkRFeU5UZzJZelF4T1RneE5qZ3hOREppTmpnNE1XRXpaalV4WkRJd05UZ3dNelZpWXpkaU9UVXhZV1F4WkRabU5HWTBOelUxTVRoa1ptWTFZakJrWXprek9EQmxNREEzTmpFeU1HSmtaR1F5TVRsbE1qQTRNekE0TkRJellqVTNaalprWVRKak4yTTFPRGc1TmpRNU5qTXpNekk1TlRKa0luMD0iXSxbImh0dHAiLCJodHRwczovL3NiLm90aGVyc3R1ZmYuc3R1ZGlvIl1dLCJjb250ZW50IjoiIiwicHVia2V5IjoiYWEyZDQ3YjgyZTBlNTdkM2E1MzZkMjZiYTM3ZDc0MjU0ODFlNDAyZTVlNTRmY2RhYWIyOTM3MTJmMTg3NWFkYiIsImlkIjoiMGMxZWY5ZTAxYTdhOWFkYzU5OTIzMDNkMWI5ZWRkY2E3NDVmYzc4ZWY5NzhhNDdhYjZhNjJiN2U1Nzc4NmNhOCIsInNpZyI6IjBhMWQ3MDQ5YWE3NWI1NDJmNjdmZTdjYjBhNGRlY2YzMjM0MTQ3M2U2YjEwYzE0YjBlMTgzMTZhN2M1YjhkMzIwNDg0MjY1ZDlkNDg3NTBlNDNjYjRmYWRlYTMwMjViZjM5YzVkYWZkZTNmNDhhY2U4NzdlMDIzODZlNDc4YzNlIn0=',
+
+  async toggleCvmSync() {
+    this.useCvmSync = !this.useCvmSync;
+    localStorage.setItem('use_cvm_sync', this.useCvmSync.toString());
+
+    // Reconnect seamlessly with new transport (keep same token)
+    if (this.superbasedConnected) {
+      const token = localStorage.getItem('superbased_token') || this.OTHERSTUFF_TOKEN;
+      this.stopAutoSync();
+
+      try {
+        const client = await this.createSyncClient(token);
+        await client.whoami();
+        this.superbasedClient = client;
+        console.log(`SuperBased: Switched to ${client.isCvm ? 'CVM relay' : 'HTTPS'} transport`);
+        this.startAutoSync();
+      } catch (err) {
+        console.error('SuperBased: Failed to switch transport:', err);
+        this.superbasedError = `Transport switch failed: ${err.message}`;
+      }
+    }
+  },
+
+  getCvmSignerOptions() {
+    const secret = getMemorySecret();
+    if (secret) {
+      return { privateKeyHex: bytesToHex(secret) };
+    }
+    const pubkey = getMemoryPubkey();
+    if (pubkey && window.nostr) {
+      return { extensionPubkey: pubkey };
+    }
+    throw new Error('No signing method available for CVM');
+  },
+
+  async createSyncClient(token) {
+    if (this.useCvmSync && window.SuperBasedSDK?.createCvmSyncAdapter) {
+      const signerOpts = this.getCvmSignerOptions();
+      return window.SuperBasedSDK.createCvmSyncAdapter(token, signerOpts);
+    }
+    return new SuperBasedClient(token);
+  },
 
   async connectWithOtherStuff() {
     this.superbasedTokenInput = this.OTHERSTUFF_TOKEN;
@@ -849,9 +785,9 @@ Alpine.store('app', {
       }
 
       // Try to create client and test connection
-      const client = new SuperBasedClient(token);
+      const client = await this.createSyncClient(token);
       const whoami = await client.whoami();
-      console.log('SuperBased: Connected as', whoami.npub);
+      console.log(`SuperBased: Connected${client.isCvm ? ' via CVM' : ''} as`, whoami.npub || whoami.status || 'OK');
 
       // Save token locally
       localStorage.setItem('superbased_token', token);
@@ -886,11 +822,11 @@ Alpine.store('app', {
 
   async initSuperBasedClient(token) {
     try {
-      const client = new SuperBasedClient(token);
+      const client = await this.createSyncClient(token);
       // Test connection
       await client.whoami();
       this.superbasedClient = client;
-      console.log('SuperBased: Client initialized');
+      console.log(`SuperBased: Client initialized${client.isCvm ? ' (CVM relay transport)' : ''}`);
 
       // Load delegations so addTodo() can derive delegates (don't block)
       this.loadDelegations().catch(err => {
@@ -1392,7 +1328,7 @@ Alpine.data('todoItem', (todo) => ({
       }
 
       const savedId = this.localTodo.id;
-      store.stopEditing();
+      store.closeEditModal();
 
       // Set BEFORE loadTodos so new component sees it on init
       store.justSavedTodoId = savedId;

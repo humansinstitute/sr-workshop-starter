@@ -150,7 +150,6 @@
         <h2>Work</h2>
         <button
           class="archive-toggle"
-          x-show="$store.app.currentView === 'list'"
           @click="$store.app.toggleArchive()"
           x-text="$store.app.showArchive ? 'Hide archive' : `Archive (${$store.app.doneTodos.length})`"
         ></button>
@@ -175,57 +174,156 @@
         >Clear filters</button>
       </div>
 
-      <!-- View Switcher -->
-      <div class="view-switcher">
-        <button
-          type="button"
-          :class="{ active: $store.app.currentView === 'list' }"
-          @click="$store.app.currentView = 'list'"
-        >List</button>
-        <button
-          type="button"
-          :class="{ active: $store.app.currentView === 'kanban' }"
-          @click="$store.app.currentView = 'kanban'"
-        >Board</button>
-        <button
-          type="button"
-          :class="{ active: $store.app.currentView === 'calendar' }"
-          @click="$store.app.currentView = 'calendar'"
-        >Calendar</button>
-      </div>
+      <!-- ========== TODO LIST ========== -->
+      <div class="todo-list-view">
+        <ul class="todo-list">
+          <template x-if="$store.app.activeTodos.length === 0">
+            <li class="empty-state">No active work. Add something new!</li>
+          </template>
+          <template x-for="todo in $store.app.activeTodos" :key="todo.id">
+            <li
+              x-data="todoItem(todo)"
+              :class="{ 'todo-saved': $store.app.justSavedTodoId === todo.id }"
+            >
+              <div class="todo-row" @click="$store.app.openEditModal(todo.id)">
+                <span class="todo-title" x-text="todo.title"></span>
+                <span class="badges">
+                  <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
+                  <span class="badge" :class="`state-${todo.state}`" x-text="$store.app.formatState(todo.state)"></span>
+                  <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
+                    <span class="tag-chip" x-text="tag"></span>
+                  </template>
+                  <span
+                    class="share-icon"
+                    x-show="(todo.read_delegates?.length || 0) + (todo.write_delegates?.length || 0) > 0"
+                    title="Shared with delegates"
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                      <circle cx="9" cy="7" r="4"/>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+                    </svg>
+                  </span>
+                </span>
+              </div>
 
-      <!-- ========== LIST VIEW ========== -->
-      <template x-if="$store.app.currentView === 'list'">
-        <div class="todo-list-view">
+              <!-- Edit Modal -->
+              <div
+                class="modal-overlay"
+                x-show="$store.app.editModalTodoId === todo.id"
+                @click.self="$store.app.closeEditModal()"
+                @keydown.escape.window="$store.app.closeEditModal()"
+              >
+                <div class="modal edit-modal">
+                  <button class="modal-close" type="button" @click="$store.app.closeEditModal()">&times;</button>
+                  <form class="edit-form" @submit.prevent="save()">
+                    <label>
+                      Title
+                      <input x-model="localTodo.title" required />
+                    </label>
+                    <label>
+                      Description
+                      <textarea x-model="localTodo.description" rows="3"></textarea>
+                    </label>
+                    <label>
+                      Priority
+                      <select x-model="localTodo.priority">
+                        <option value="rock">Rock</option>
+                        <option value="pebble">Pebble</option>
+                        <option value="sand">Sand</option>
+                      </select>
+                    </label>
+                    <label>
+                      State
+                      <select x-model="localTodo.state">
+                        <option value="new">New</option>
+                        <option value="ready">Ready</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="done">Done</option>
+                      </select>
+                    </label>
+                    <label>
+                      Scheduled For
+                      <input type="date" x-model="localTodo.scheduled_for" />
+                    </label>
+                    <label>
+                      Tags
+                      <div class="tag-input-wrapper">
+                        <template x-for="tag in tagsArray" :key="tag">
+                          <span class="tag-chip">
+                            <span x-text="tag"></span>
+                            <span class="remove-tag" @click="removeTag(tag)">&times;</span>
+                          </span>
+                        </template>
+                        <input
+                          type="text"
+                          x-model="tagInput"
+                          @keydown="handleTagKeydown($event)"
+                          @blur="addTag()"
+                          placeholder="Type and press comma..."
+                        />
+                      </div>
+                    </label>
+                    <label class="assigned-to-field">
+                      Assign To (npub)
+                      <input type="text" x-model="localTodo.assigned_to" placeholder="npub1... (optional)" />
+                      <span class="assigned-to-hint">Delegate must have write permission to update</span>
+                    </label>
+
+                    <!-- Shared with (read-only delegate status) -->
+                    <div class="delegate-status-section" x-show="$store.app.superbasedConnected && [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])].length > 0">
+                      <label>Shared With</label>
+                      <div class="delegate-status-list">
+                        <template x-for="d in [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])]" :key="d">
+                          <span class="delegate-chip-readonly">
+                            <span x-text="$store.app.delegateProfiles[d]?.name || $store.app.delegateProfiles[d]?.npub || d.slice(0,8) + '...'"></span>
+                            <span class="badge-sm" x-text="(todo.write_delegates || []).includes(d) ? 'read+write' : 'read'"></span>
+                          </span>
+                        </template>
+                      </div>
+                    </div>
+
+                    <div class="edit-modal-actions">
+                      <button type="submit" class="btn-update">Update</button>
+                      <button type="button" class="btn-delete" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </li>
+          </template>
+        </ul>
+
+        <!-- Archive Section -->
+        <section class="archive-section" x-show="$store.app.showArchive">
+          <div class="section-heading"><h2>Archive</h2></div>
           <ul class="todo-list">
-            <template x-if="$store.app.activeTodos.length === 0">
-              <li class="empty-state">No active work. Add something new!</li>
+            <template x-if="$store.app.doneTodos.length === 0">
+              <li class="empty-state">Nothing archived yet.</li>
             </template>
-            <template x-for="todo in $store.app.activeTodos" :key="todo.id">
-              <li x-data="todoItem(todo)" :class="{ 'todo-saved': $store.app.justSavedTodoId === todo.id }">
-                <details x-effect="if ($store.app.justSavedTodoId === todo.id) $el.open = false">
-                  <summary>
-                    <span class="todo-title" x-text="todo.title"></span>
-                    <span class="badges">
-                      <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
-                      <span class="badge" :class="`state-${todo.state}`" x-text="$store.app.formatState(todo.state)"></span>
-                      <span
-                        class="badge delegate-badge"
-                        x-show="(todo.read_delegates?.length || 0) + (todo.write_delegates?.length || 0) > 0"
-                        x-text="'shared:' + ((todo.read_delegates?.length || 0) + (todo.write_delegates?.length || 0))"
-                      ></span>
-                      <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
-                        <span class="tag-chip" x-text="tag"></span>
-                      </template>
-                    </span>
-                  </summary>
-                  <div class="todo-body">
-                    <p class="todo-description" x-show="todo.description" x-text="todo.description"></p>
-                    <p class="todo-description" x-show="todo.scheduled_for">
-                      <strong>Scheduled for:</strong> <span x-text="todo.scheduled_for"></span>
-                    </p>
+            <template x-for="todo in $store.app.doneTodos" :key="todo.id">
+              <li x-data="todoItem(todo)">
+                <div class="todo-row" @click="$store.app.openEditModal(todo.id)">
+                  <span class="todo-title" x-text="todo.title"></span>
+                  <span class="badges">
+                    <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
+                    <span class="badge state-done">Done</span>
+                    <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
+                      <span class="tag-chip" x-text="tag"></span>
+                    </template>
+                  </span>
+                </div>
 
-                    <!-- Edit Form -->
+                <!-- Edit Modal (archive) -->
+                <div
+                  class="modal-overlay"
+                  x-show="$store.app.editModalTodoId === todo.id"
+                  @click.self="$store.app.closeEditModal()"
+                  @keydown.escape.window="$store.app.closeEditModal()"
+                >
+                  <div class="modal edit-modal">
+                    <button class="modal-close" type="button" @click="$store.app.closeEditModal()">&times;</button>
                     <form class="edit-form" @submit.prevent="save()">
                       <label>
                         Title
@@ -274,227 +372,18 @@
                           />
                         </div>
                       </label>
-                      <label class="assigned-to-field">
-                        Assign To (npub)
-                        <input type="text" x-model="localTodo.assigned_to" placeholder="npub1... (optional)" />
-                        <span class="assigned-to-hint">Delegate must have write permission to update</span>
-                      </label>
-
-                      <!-- Shared with (read-only delegate status) -->
-                      <div class="delegate-status-section" x-show="$store.app.superbasedConnected && [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])].length > 0">
-                        <label>Shared With</label>
-                        <div class="delegate-status-list">
-                          <template x-for="d in [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])]" :key="d">
-                            <span class="delegate-chip-readonly">
-                              <span x-text="$store.app.delegateProfiles[d]?.name || $store.app.delegateProfiles[d]?.npub || d.slice(0,8) + '...'"></span>
-                              <span class="badge-sm" x-text="(todo.write_delegates || []).includes(d) ? 'read+write' : 'read'"></span>
-                            </span>
-                          </template>
-                        </div>
+                      <div class="edit-modal-actions">
+                        <button type="submit" class="btn-update">Update</button>
+                        <button type="button" class="btn-delete" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
                       </div>
-
-                      <button type="submit">Update</button>
                     </form>
-
-                    <!-- Action Buttons -->
-                    <div class="todo-actions">
-                      <template x-for="nextState in $store.app.getTransitions(todo.state)" :key="nextState">
-                        <button
-                          type="button"
-                          @click="$store.app.transitionState(todo.id, nextState)"
-                          x-text="$store.app.formatTransition(todo.state, nextState)"
-                        ></button>
-                      </template>
-                      <button type="button" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
-                    </div>
                   </div>
-                </details>
+                </div>
               </li>
             </template>
           </ul>
-
-          <!-- Archive Section -->
-          <section class="archive-section" x-show="$store.app.showArchive">
-            <div class="section-heading"><h2>Archive</h2></div>
-            <ul class="todo-list">
-              <template x-if="$store.app.doneTodos.length === 0">
-                <li class="empty-state">Nothing archived yet.</li>
-              </template>
-              <template x-for="todo in $store.app.doneTodos" :key="todo.id">
-                <li x-data="todoItem(todo)">
-                  <details>
-                    <summary>
-                      <span class="todo-title" x-text="todo.title"></span>
-                      <span class="badges">
-                        <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
-                        <span class="badge state-done">Done</span>
-                        <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
-                          <span class="tag-chip" x-text="tag"></span>
-                        </template>
-                      </span>
-                    </summary>
-                    <div class="todo-body">
-                      <p class="todo-description" x-show="todo.description" x-text="todo.description"></p>
-                      <div class="todo-actions">
-                        <button type="button" @click="$store.app.transitionState(todo.id, 'ready')">Reopen</button>
-                        <button type="button" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
-                      </div>
-                    </div>
-                  </details>
-                </li>
-              </template>
-            </ul>
-          </section>
-        </div>
-      </template>
-
-      <!-- ========== KANBAN VIEW ========== -->
-      <template x-if="$store.app.currentView === 'kanban'">
-        <div class="kanban-board">
-          <template x-for="col in ['new', 'ready', 'in_progress', 'done']" :key="col">
-            <div
-              class="kanban-column"
-              @dragover.prevent="$event.currentTarget.classList.add('drag-over')"
-              @dragleave="$event.currentTarget.classList.remove('drag-over')"
-              @drop.prevent="$event.currentTarget.classList.remove('drag-over'); $store.app.handleKanbanDrop($event.dataTransfer.getData('text/plain'), col)"
-            >
-              <div class="kanban-column-header">
-                <span class="kanban-column-title" x-text="$store.app.formatState(col)"></span>
-                <span class="kanban-column-count" x-text="$store.app.todosByState[col].length"></span>
-              </div>
-              <div class="kanban-cards">
-                <template x-for="todo in $store.app.todosByState[col]" :key="todo.id">
-                  <div
-                    class="kanban-card"
-                    draggable="true"
-                    @dragstart="$event.dataTransfer.setData('text/plain', todo.id); $event.dataTransfer.effectAllowed = 'move'"
-                  >
-                    <div class="kanban-card-title" x-text="todo.title"></div>
-                    <div class="kanban-card-meta">
-                      <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
-                      <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
-                        <span class="tag-chip" x-text="tag"></span>
-                      </template>
-                    </div>
-                    <div class="kanban-card-actions">
-                      <template x-for="nextState in $store.app.getTransitions(todo.state)" :key="nextState">
-                        <button
-                          type="button"
-                          class="kanban-action-btn"
-                          @click="$store.app.transitionState(todo.id, nextState)"
-                          x-text="$store.app.formatTransition(todo.state, nextState)"
-                        ></button>
-                      </template>
-                    </div>
-                  </div>
-                </template>
-                <div class="kanban-empty" x-show="$store.app.todosByState[col].length === 0">
-                  No items
-                </div>
-              </div>
-            </div>
-          </template>
-        </div>
-      </template>
-
-      <!-- ========== CALENDAR VIEW ========== -->
-      <template x-if="$store.app.currentView === 'calendar'">
-        <div class="calendar-container">
-          <div class="calendar-main">
-            <!-- Navigation -->
-            <div class="calendar-nav">
-              <button type="button" @click="$store.app.prevMonth()">&larr;</button>
-              <span class="calendar-month-label" x-text="$store.app.calendarMonthLabel"></span>
-              <button type="button" @click="$store.app.nextMonth()">&rarr;</button>
-              <button type="button" class="calendar-today-btn" @click="$store.app.goToToday()">Today</button>
-            </div>
-
-            <!-- Day headers -->
-            <div class="calendar-grid calendar-header-row">
-              <template x-for="day in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat']" :key="day">
-                <div class="calendar-day-header" x-text="day"></div>
-              </template>
-            </div>
-
-            <!-- Day cells -->
-            <div class="calendar-grid">
-              <template x-for="cell in $store.app.calendarDays" :key="cell.date">
-                <div
-                  class="calendar-cell"
-                  :class="{
-                    'other-month': !cell.isCurrentMonth,
-                    'is-today': $store.app.isToday(cell.date),
-                    'is-selected': $store.app.calendarSelectedDate === cell.date
-                  }"
-                  @click="$store.app.selectDate(cell.date)"
-                  @dragover.prevent
-                  @drop.prevent="$store.app.handleCalendarDrop($event.dataTransfer.getData('text/plain'), cell.date)"
-                >
-                  <span class="calendar-day-number" x-text="cell.day"></span>
-                  <div class="calendar-cell-todos">
-                    <template x-for="todo in $store.app.todosForDate(cell.date).slice(0, 3)" :key="todo.id">
-                      <div
-                        class="calendar-todo-chip"
-                        :class="`priority-${todo.priority}`"
-                        draggable="true"
-                        @dragstart="$event.dataTransfer.setData('text/plain', todo.id); $event.stopPropagation()"
-                        x-text="todo.title"
-                      ></div>
-                    </template>
-                    <div
-                      class="calendar-more"
-                      x-show="$store.app.todosForDate(cell.date).length > 3"
-                      x-text="'+' + ($store.app.todosForDate(cell.date).length - 3) + ' more'"
-                    ></div>
-                  </div>
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <!-- Sidebar: Unscheduled + Selected Date Details -->
-          <div class="calendar-sidebar">
-            <!-- Selected date detail -->
-            <div class="calendar-detail" x-show="$store.app.calendarSelectedDate">
-              <h3 x-text="$store.app.calendarSelectedDate"></h3>
-              <ul class="calendar-detail-list">
-                <template x-for="todo in $store.app.todosForDate($store.app.calendarSelectedDate)" :key="todo.id">
-                  <li>
-                    <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
-                    <span x-text="todo.title"></span>
-                    <span class="badge" :class="`state-${todo.state}`" x-text="$store.app.formatState(todo.state)"></span>
-                  </li>
-                </template>
-                <li class="empty-state" x-show="$store.app.todosForDate($store.app.calendarSelectedDate).length === 0">
-                  No todos scheduled
-                </li>
-              </ul>
-            </div>
-
-            <!-- Unscheduled todos -->
-            <div class="calendar-unscheduled">
-              <h3>Unscheduled</h3>
-              <div class="calendar-unscheduled-list">
-                <template x-for="todo in $store.app.unscheduledTodos" :key="todo.id">
-                  <div
-                    class="kanban-card"
-                    draggable="true"
-                    @dragstart="$event.dataTransfer.setData('text/plain', todo.id)"
-                  >
-                    <div class="kanban-card-title" x-text="todo.title"></div>
-                    <div class="kanban-card-meta">
-                      <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
-                    </div>
-                  </div>
-                </template>
-                <div class="empty-state" x-show="$store.app.unscheduledTodos.length === 0">
-                  All todos scheduled
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </template>
+        </section>
+      </div>
     </section>
 
     <!-- QR Modal -->
@@ -583,6 +472,19 @@
         <h2>SuperBased Sync</h2>
         <p>Connect to SuperBased to sync your todos across devices.</p>
 
+        <!-- CVM Transport Toggle -->
+        <div class="cvm-toggle" style="margin: 0.75rem 0; padding: 0.5rem 0.75rem; border-radius: 6px; background: var(--bg-secondary, #f5f5f5);">
+          <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.85rem;">
+            <input
+              type="checkbox"
+              :checked="$store.app.useCvmSync"
+              @change="$store.app.toggleCvmSync()"
+            >
+            <span>Use CVM relay transport</span>
+          </label>
+          <p x-show="$store.app.useCvmSync" style="margin: 0.25rem 0 0 1.5rem; font-size: 0.75rem; opacity: 0.7;">Sync via Nostr relays instead of HTTPS</p>
+        </div>
+
         <!-- Connection Details (when connected) -->
         <div x-show="$store.app.superbasedConnected" class="superbased-connection-details">
           <div class="connection-status connected">
@@ -591,8 +493,8 @@
           </div>
           <div class="connection-info">
             <div class="info-row">
-              <span class="info-label">Server:</span>
-              <span class="info-value" x-text="$store.app.superbasedClient?.config?.httpUrl || 'Unknown'"></span>
+              <span class="info-label">Transport:</span>
+              <span class="info-value" x-text="$store.app.superbasedClient?.isCvm ? 'CVM (relay)' : ($store.app.superbasedClient?.config?.httpUrl || 'Unknown')"></span>
             </div>
             <div class="info-row">
               <span class="info-label">App:</span>
