@@ -2,6 +2,39 @@
 
 API for AI agents with delegated access to read and update todos via SuperBased.
 
+---
+
+## Connecting
+
+The app provides an **Agent Connect JSON** when the user clicks "Agent Connect". Copy the JSON and paste it into your agent session. It contains everything the agent needs.
+
+### Agent Connect JSON format
+
+```json
+{
+  "agentConnectGuide": "https://example.com/agentconnect.md",
+  "superbasedURL": "https://sb.otherstuff.studio",
+  "appNpub": "npub1abc...",
+  "appPubkey": "a1c51007...",
+  "ownerPubkey": "934b9c5b5d2cbca3c21b9d18da7cac94b61bf0cf57756531d08f6818227c77ce",
+  "ownerNpub": "npub1owner..."
+}
+```
+
+### Field mapping to MCP tools
+
+| Agent Connect field | MCP tool parameter | Format | Usage |
+|--------------------|--------------------|--------|-------|
+| `appNpub` | `app_npub` | npub (bech32) | Pass directly - already in the correct format |
+| `appPubkey` | — | 64-char hex | Hex version of appNpub, for APIs that need hex format |
+| `superbasedURL` | `base_url` | URL string | Pass directly to all SuperBased MCP calls |
+| `ownerPubkey` | `owner_pubkey` | 64-char hex | Use when syncing records back |
+| `ownerNpub` | metadata `owner` | npub (bech32) | Include in record metadata |
+
+**All values are ready to use as-is.** No format conversion needed.
+
+---
+
 ## How Delegation Works
 
 All todo data is **encrypted with NIP-44**. When a user assigns you as a delegate on their tasks, two things happen:
@@ -21,18 +54,6 @@ Wingman handles NIP-98 signing automatically. Use the `sign_nip98` MCP tool when
 
 ---
 
-## Config Values
-
-These are provided in the Agent Connect JSON from the app:
-
-- `agentConnectGuide` - URL to this document
-- `superbasedURL` - SuperBased API base URL for raw HTTP calls
-- `appNpub` - The app's npub identifier (use as `app_npub` in all SuperBased MCP calls)
-- `ownerPubkey` - Hex pubkey of the task owner (use as `owner_pubkey` when syncing records)
-- `ownerNpub` - Npub of the task owner (for display/metadata)
-
----
-
 ## Reading Delegated Tasks
 
 Use the `superbased_fetch_records` MCP tool. It automatically:
@@ -44,7 +65,8 @@ Use the `superbased_fetch_records` MCP tool. It automatically:
 
 ```
 superbased_fetch_records(
-  app_npub: "npub1abc...",
+  app_npub: "<appNpub from Agent Connect JSON>",
+  base_url: "<superbasedURL from Agent Connect JSON>",
   collection: "todos"
 )
 ```
@@ -82,30 +104,56 @@ Parse `decrypted_payload` as JSON to get the todo fields. If decryption fails, t
 
 ---
 
-## Updating Tasks
+## Creating & Updating Tasks
 
 Use the `superbased_sync_records` MCP tool. It automatically:
 - Encrypts the plaintext payload to the owner, all delegates, and Wingman
 - Authenticates via NIP-98
 - Syncs the record to SuperBased
 
-### Example: Update a task's state
+### Example: Create a new task
+
+```
+superbased_sync_records(
+  app_npub: "<appNpub from Agent Connect JSON>",
+  base_url: "<superbasedURL from Agent Connect JSON>",
+  records: [
+    {
+      "record_id": "todo_a1b2c3d4e5f67890",
+      "plaintext_payload": "{\"title\":\"New task from agent\",\"description\":\"\",\"priority\":\"sand\",\"state\":\"new\",\"tags\":\"\",\"scheduled_for\":null,\"assigned_to\":null,\"done\":0,\"deleted\":0,\"created_at\":\"2024-01-15T14:30:00.000Z\",\"updated_at\":\"2024-01-15T14:30:00.000Z\"}",
+      "owner_pubkey": "<ownerPubkey from Agent Connect JSON>",
+      "collection": "todos",
+      "delegate_pubkeys": ["<copy from existing record metadata.read_delegates>"],
+      "metadata": {
+        "local_id": "a1b2c3d4e5f67890",
+        "owner": "<ownerNpub from Agent Connect JSON>",
+        "updated_at": "2024-01-15T14:30:00.000Z",
+        "device_id": "agent",
+        "schema_version": 1
+      }
+    }
+  ]
+)
+```
+
+### Example: Update an existing task
 
 First read the current record, then sync back with changes:
 
 ```
 superbased_sync_records(
-  app_npub: "npub1abc...",
+  app_npub: "<appNpub from Agent Connect JSON>",
+  base_url: "<superbasedURL from Agent Connect JSON>",
   records: [
     {
-      "id": "todo_a1b2c3d4e5f67890",
+      "record_id": "todo_a1b2c3d4e5f67890",
       "plaintext_payload": "{\"title\":\"Buy groceries\",\"description\":\"Milk and eggs\",\"priority\":\"stone\",\"state\":\"done\",\"tags\":\"shopping\",\"scheduled_for\":null,\"assigned_to\":\"934b9c...\",\"done\":1,\"deleted\":0,\"created_at\":\"2024-01-15T14:30:00.000Z\",\"updated_at\":\"2024-01-16T09:00:00.000Z\"}",
-      "owner_pubkey": "934b9c5b5d2cbca3c21b9d18da7cac94b61bf0cf57756531d08f6818227c77ce",
+      "owner_pubkey": "<ownerPubkey from Agent Connect JSON>",
       "collection": "todos",
-      "delegate_pubkeys": ["abc123...", "def456..."],
+      "delegate_pubkeys": ["<copy from existing record metadata.read_delegates>"],
       "metadata": {
         "local_id": "a1b2c3d4e5f67890",
-        "owner": "npub1owner...",
+        "owner": "<ownerNpub from Agent Connect JSON>",
         "read_delegates": ["abc123...", "def456..."],
         "write_delegates": ["abc123..."],
         "updated_at": "2024-01-16T09:00:00.000Z",
@@ -117,12 +165,16 @@ superbased_sync_records(
 )
 ```
 
-**CRITICAL**:
-- `plaintext_payload` must contain **all fields**, not just changed ones
-- `owner_pubkey` must be the **hex pubkey** of the task owner
-- `delegate_pubkeys` should include all current delegates (from the record's metadata)
-- Always update `updated_at` to the current time in both the payload and metadata
-- Set `device_id` to `"agent"` in metadata
+### Required fields for every sync
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `record_id` | **YES** | Format: `todo_{16-char-hex}`. Generate one for new records, reuse existing for updates. |
+| `plaintext_payload` | **YES** | JSON string with **all** todo fields (not just changed ones) |
+| `owner_pubkey` | **YES** | Hex pubkey from Agent Connect JSON `ownerPubkey` |
+| `collection` | Recommended | Use `"todos"` |
+| `delegate_pubkeys` | Recommended | Copy from existing record's `metadata.read_delegates` |
+| `metadata` | Recommended | Include `device_id: "agent"`, `schema_version: 1`, `updated_at` |
 
 ---
 
@@ -298,15 +350,57 @@ Examples:
 - `2024-12-25T00:00:00.000Z`
 - `2025-06-01T09:15:30.000Z`
 
-Generate in JavaScript:
-```javascript
-new Date().toISOString()
+---
+
+## Deep Links to Tasks
+
+Users (or other agents) may share a direct link to a specific task in the format:
+
+```
+https://<domain>/?todo=4010bc5a34508299
 ```
 
-Generate in bash:
-```bash
-date -u +"%Y-%m-%dT%H:%M:%S.000Z"
+The `todo` query parameter is the **local hex ID** of the task. To work with this task via SuperBased, prefix it with `todo_` to get the `record_id`:
+
 ```
+URL param:   ?todo=4010bc5a34508299
+record_id:   todo_4010bc5a34508299
+```
+
+### Processing a deep-linked task
+
+1. Extract the ID from the URL: `4010bc5a34508299`
+2. Fetch the record using its `record_id`:
+
+```
+superbased_fetch_records(
+  app_npub: "<appNpub>",
+  base_url: "<superbasedURL>",
+  collection: "todos"
+)
+```
+
+3. Find the record where `record_id` equals `todo_4010bc5a34508299` in the response
+4. Parse `decrypted_payload` as JSON to read the task fields
+5. To update it, sync back using the same `record_id`:
+
+```
+superbased_sync_records(
+  app_npub: "<appNpub>",
+  base_url: "<superbasedURL>",
+  records: [
+    {
+      "record_id": "todo_4010bc5a34508299",
+      "plaintext_payload": "<updated JSON>",
+      "owner_pubkey": "<ownerPubkey>",
+      "collection": "todos",
+      "delegate_pubkeys": ["<from original record>"]
+    }
+  ]
+)
+```
+
+**Note**: You must have delegate access to the record to read or update it. If the record isn't in your fetch results, you haven't been granted access.
 
 ---
 
@@ -355,13 +449,14 @@ If current tags are `"work"`, to add `"urgent"`:
 
 The `record_id` follows this format:
 ```
-todo_{16-character-hex-uuid}
+todo_{16-character-hex}
 ```
 
 Example: `todo_a1b2c3d4e5f67890`
 
 **Important**: Use **underscores** (NOT hyphens): `todo_abc123` not `todo-abc123`.
 
+When creating a new todo, generate a random 16-character hex string for the ID.
 When updating an existing todo, use the same `record_id` from the fetched record.
 
 ---
@@ -395,8 +490,8 @@ Check `metadata.write_delegates` in the fetched record to confirm you have write
 
 | Operation | Tool | Key Parameters |
 |-----------|------|---------------|
-| Read tasks | `superbased_fetch_records` | `app_npub`, `collection` |
-| Update tasks | `superbased_sync_records` | `app_npub`, `records` |
+| Read tasks | `superbased_fetch_records` | `app_npub`, `base_url`, `collection` |
+| Create/Update tasks | `superbased_sync_records` | `app_npub`, `base_url`, `records` |
 | Check API health | `superbased_health` | `base_url` (optional) |
 | NIP-98 auth (raw) | `sign_nip98` | `url`, `method` |
 | Decrypt messages | `nip44_decrypt` | `ciphertext`, `sender_pubkey` |
