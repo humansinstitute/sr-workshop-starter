@@ -1,6 +1,6 @@
 {
-  "name": "Super Based Todo",
-  "short_name": "Based Todo",
+  "name": "Speedrun Todo",
+  "short_name": "Speedrun Todo",
   "description": "Local-first todo app with Nostr auth and encrypted storage",
   "start_url": "/",
   "display": "standalone",

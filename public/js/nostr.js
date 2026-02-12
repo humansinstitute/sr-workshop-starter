@@ -85,7 +85,7 @@ export function buildUnsignedEvent(method) {
       ['app', APP_TAG],
       ['method', method],
     ],
-    content: 'Authenticate with Super Based Todo',
+    content: 'Authenticate with Speedrun Todo',
   };
 }
 
@@ -99,7 +99,7 @@ export function buildAuthEvent(pubkey) {
       ['app', APP_TAG],
       ['challenge', crypto.randomUUID()],
     ],
-    content: 'Auth token for Super Based Todo',
+    content: 'Auth token for Speedrun Todo',
   };
 }
 

@@ -65,7 +65,7 @@ export async function generateRegistrationBlob() {
   // Registration content (plaintext - nothing secret here)
   const content = {
     url: window.location.origin,
-    name: 'Super Based Todo',
+    name: 'Speedrun Todo',
     description: 'Local-first todo app with Nostr auth',
     v: 1,
   };
