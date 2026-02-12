@@ -2,6 +2,7 @@
 
 - My preference is for you to answer quickly. Do the research you need but don't get carried away doing long tasks.
 - If you have multiple steps, ask a question to ensure you keep on track.
+- **Fix problems at the source.** Don't create workaround code for bugs in other systems you have access to. If the fix belongs in flux-adaptor, fix it there. No adapter shims, no metadata hacks, no "immediate fix" band-aids.
 
 ## Documentation
 

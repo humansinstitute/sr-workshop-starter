@@ -47,23 +47,6 @@ module.exports = {
       "autorestart": false,
       "max_restarts": 0,
       "min_uptime": "5s"
-    },
-    {
-      "name": "honest-ivory-thicket-app-sb-todo-updates",
-      "namespace": "wingman-apps",
-      "script": "bash",
-      "args": [
-        "-c",
-        "set -a; [ -f .env ] && . ./.env; set +a; APP_ID='040da29c-efe0-41ba-a702-3a4181a3bb5b' APP_LABEL='SB Todo Updates' USER_ALIAS='honest-ivory-thicket' PORT=41002 bunx vite --host"
-      ],
-      "cwd": "/Users/mini/code/sr-workshop-starter",
-      "out_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-sb-todo-updates-out.log",
-      "error_file": "/Users/mini/code/sr-workshop-starter/apps/logs/honest-ivory-thicket-app-sb-todo-updates-error.log",
-      "log_date_format": "YYYY-MM-DD HH:mm:ss",
-      "merge_logs": true,
-      "autorestart": false,
-      "max_restarts": 0,
-      "min_uptime": "5s"
     }
   ]
 };

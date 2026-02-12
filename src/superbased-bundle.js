@@ -11,6 +11,13 @@ import { nip19, verifyEvent, finalizeEvent } from 'nostr-tools';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { Observable, Subject, filter, map, takeUntil } from 'rxjs';
 
+// CVM relay endpoints for relay-based sync transport
+const CVM_RELAYS = [
+  'wss://relay.contextvm.org',
+  'wss://cvm.otherstuff.ai',
+  'wss://relay2.contextvm.org',
+];
+
 // Sync notification constants
 const SYNC_NOTIFY_KIND = 30080;
 const NOTIFICATION_RELAYS = [
@@ -193,6 +200,84 @@ async function createClient(options) {
         console.error('SuperBased: disconnect error', err);
       }
     }
+  };
+}
+
+/**
+ * Create a CVM sync adapter - wraps a CVM client to match SuperBasedClient interface.
+ * Extracts serverPubkeyHex from the token (no hardcoding needed).
+ * Encryption/decryption (DER) happens externally in performSync, not here.
+ */
+async function createCvmSyncAdapter(token, signerOptions) {
+  const config = parseToken(token);
+  if (!config.isValid) throw new Error('Invalid token');
+
+  const serverPubkeyHex = config.serverPubkeyHex;
+  if (!serverPubkeyHex) throw new Error('Token missing server pubkey');
+
+  const appNpub = config.appNpub;
+  if (!appNpub) throw new Error('Token missing app npub');
+
+  console.log('CVM: Creating adapter with server pubkey from token:', serverPubkeyHex.slice(0, 12) + '...');
+  console.log('CVM: Relays:', CVM_RELAYS.join(', '));
+
+  // Create CVM client reusing existing createClient infrastructure
+  const cvmClient = await createClient({
+    ...signerOptions,
+    serverPubkeyHex,
+    relays: CVM_RELAYS,
+  });
+
+  // Return adapter matching SuperBasedClient interface
+  return {
+    config: {
+      isValid: true,
+      serverPubkeyHex,
+      serverNpub: config.serverNpub,
+      appNpub,
+      httpUrl: 'CVM (relay transport)',
+      relayUrl: config.relayUrl,
+    },
+
+    isCvm: true,
+
+    async fetchRecords(options = {}) {
+      return cvmClient.FetchRecords(config.workspaceNpub, appNpub, options.collection, options.since);
+    },
+
+    async syncRecords(records) {
+      return cvmClient.SyncRecords(config.workspaceNpub, appNpub, records);
+    },
+
+    async whoami() {
+      return cvmClient.Health({});
+    },
+
+    async requestWithTimeout(path, method, body, timeoutMs) {
+      return cvmClient.Health({});
+    },
+
+    async fetchDelegatedRecords(options = {}) {
+      console.warn('CVM: fetchDelegatedRecords not yet supported via relay transport');
+      return { records: [] };
+    },
+
+    async listDelegations() {
+      console.warn('CVM: listDelegations not yet supported via relay transport');
+      return { delegations: [] };
+    },
+
+    async grantDelegation() {
+      throw new Error('Delegation management not available in CVM mode');
+    },
+
+    async revokeDelegation() {
+      throw new Error('Delegation management not available in CVM mode');
+    },
+
+    async disconnect() {
+      await cvmClient.disconnect();
+    },
   };
 }
 
@@ -580,6 +665,7 @@ function createDelegationNotifier(options) {
 // Export to window
 window.SuperBasedSDK = {
   createClient,
+  createCvmSyncAdapter,
   createSyncNotifier,
   createDelegationNotifier,
   parseToken,
@@ -590,6 +676,7 @@ window.SuperBasedSDK = {
   // Constants for external use
   DELEGATION_NOTIFY_KIND,
   DELEGATION_RELAYS,
+  CVM_RELAYS,
 };
 
 console.log('SuperBased SDK loaded');

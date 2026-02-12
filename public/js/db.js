@@ -514,22 +514,43 @@ export async function parseDERRecord(record) {
     try {
       const myPubkey = getMemoryPubkey();
       let decryptedPayload;
+      const encryptedFrom = record.metadata?.encrypted_from;
 
-      // Try decrypt as owner first
-      try {
-        decryptedPayload = await decryptFromSelf(record.encrypted_data);
-      } catch (ownerErr) {
-        // Not the owner — try as delegate
-        if (myPubkey && record.delegate_payloads?.[myPubkey]) {
-          // Need owner pubkey to derive conversation key
-          const ownerPubkey = record.metadata?.owner;
-          if (!ownerPubkey) throw new Error('No owner pubkey in metadata');
-          decryptedPayload = await decryptFromSender(
-            record.delegate_payloads[myPubkey],
-            ownerPubkey
-          );
-        } else {
-          throw new Error('Cannot decrypt: not owner or delegate');
+      // If encrypted_from is set and differs from our pubkey,
+      // a delegate/agent wrote this record — decrypt using their pubkey
+      if (encryptedFrom && encryptedFrom !== myPubkey) {
+        try {
+          decryptedPayload = await decryptFromSender(record.encrypted_data, encryptedFrom);
+        } catch (senderErr) {
+          // Fallback: try delegate_payloads for our key
+          if (myPubkey && record.delegate_payloads?.[myPubkey]) {
+            const ownerPubkey = record.metadata?.owner;
+            if (!ownerPubkey) throw new Error('No owner pubkey in metadata');
+            decryptedPayload = await decryptFromSender(
+              record.delegate_payloads[myPubkey],
+              encryptedFrom
+            );
+          } else {
+            throw senderErr;
+          }
+        }
+      } else {
+        // No encrypted_from or it's our own pubkey — try self-decrypt (owner path)
+        try {
+          decryptedPayload = await decryptFromSelf(record.encrypted_data);
+        } catch (ownerErr) {
+          // Not the owner — try as delegate
+          if (myPubkey && record.delegate_payloads?.[myPubkey]) {
+            // Need owner pubkey to derive conversation key
+            const ownerPubkey = record.metadata?.owner;
+            if (!ownerPubkey) throw new Error('No owner pubkey in metadata');
+            decryptedPayload = await decryptFromSender(
+              record.delegate_payloads[myPubkey],
+              ownerPubkey
+            );
+          } else {
+            throw new Error('Cannot decrypt: not owner or delegate');
+          }
         }
       }
 
