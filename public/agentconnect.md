@@ -28,7 +28,7 @@ The app provides an **Agent Connect JSON** when the user clicks "Agent Connect".
 | `appNpub` | `app_npub` | npub (bech32) | Pass directly - already in the correct format |
 | `appPubkey` | — | 64-char hex | Hex version of appNpub, for APIs that need hex format |
 | `superbasedURL` | `base_url` | URL string | Pass directly to all SuperBased MCP calls |
-| `ownerPubkey` | `owner_pubkey` | 64-char hex | Use when syncing records back |
+| `ownerPubkey` | `owner_pubkey` | 64-char hex | **Required** for both fetch and sync — scopes records to this owner |
 | `ownerNpub` | metadata `owner` | npub (bech32) | Include in record metadata |
 
 **All values are ready to use as-is.** No format conversion needed.
@@ -66,6 +66,7 @@ Use the `superbased_fetch_records` MCP tool. It automatically:
 ```
 superbased_fetch_records(
   app_npub: "<appNpub from Agent Connect JSON>",
+  owner_pubkey: "<ownerPubkey from Agent Connect JSON>",
   base_url: "<superbasedURL from Agent Connect JSON>",
   collection: "todos"
 )
@@ -375,6 +376,7 @@ record_id:   todo_4010bc5a34508299
 ```
 superbased_fetch_records(
   app_npub: "<appNpub>",
+  owner_pubkey: "<ownerPubkey>",
   base_url: "<superbasedURL>",
   collection: "todos"
 )
@@ -490,7 +492,7 @@ Check `metadata.write_delegates` in the fetched record to confirm you have write
 
 | Operation | Tool | Key Parameters |
 |-----------|------|---------------|
-| Read tasks | `superbased_fetch_records` | `app_npub`, `base_url`, `collection` |
+| Read tasks | `superbased_fetch_records` | `app_npub`, `owner_pubkey`, `base_url`, `collection` |
 | Create/Update tasks | `superbased_sync_records` | `app_npub`, `base_url`, `records` |
 | Check API health | `superbased_health` | `base_url` (optional) |
 | NIP-98 auth (raw) | `sign_nip98` | `url`, `method` |
