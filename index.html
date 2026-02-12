@@ -180,12 +180,12 @@
           <template x-if="$store.app.activeTodos.length === 0">
             <li class="empty-state">No active work. Add something new!</li>
           </template>
-          <template x-for="todo in $store.app.activeTodos" :key="todo.id">
+          <template x-for="todo in $store.app.activeTodos" :key="todo.record_id">
             <li
               x-data="todoItem(todo)"
-              :class="{ 'todo-saved': $store.app.justSavedTodoId === todo.id }"
+              :class="{ 'todo-saved': $store.app.justSavedTodoId === todo.record_id }"
             >
-              <div class="todo-row" @click="$store.app.openEditModal(todo.id)">
+              <div class="todo-row" @click="$store.app.openEditModal(todo.record_id)">
                 <span class="todo-title" x-text="todo.title"></span>
                 <span class="badges">
                   <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
@@ -193,25 +193,13 @@
                   <template x-for="tag in $store.app.parseTags(todo.tags)" :key="tag">
                     <span class="tag-chip" x-text="tag"></span>
                   </template>
-                  <span
-                    class="share-icon"
-                    x-show="(todo.read_delegates?.length || 0) + (todo.write_delegates?.length || 0) > 0"
-                    title="Shared with delegates"
-                  >
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                      <circle cx="9" cy="7" r="4"/>
-                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                    </svg>
-                  </span>
                 </span>
               </div>
 
               <!-- Edit Modal -->
               <div
                 class="modal-overlay"
-                x-show="$store.app.editModalTodoId === todo.id"
+                x-show="$store.app.editModalTodoId === todo.record_id"
                 @click.self="$store.app.closeEditModal()"
                 @keydown.escape.window="$store.app.closeEditModal()"
               >
@@ -277,7 +265,7 @@
                       <button
                         type="button"
                         class="copy-link-btn"
-                        @click="$store.app.copyTodoLink(todo.id)"
+                        @click="$store.app.copyTodoLink(todo.record_id)"
                         title="Copy link to this task"
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -286,25 +274,11 @@
                         </svg>
                         <span>Copy link</span>
                       </button>
-                      <div class="delegate-status-inline" x-show="$store.app.superbasedConnected && [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])].length > 0">
-                        <svg class="share-icon-sm" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-                          <circle cx="9" cy="7" r="4"/>
-                          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-                          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-                        </svg>
-                        <template x-for="d in [...new Set([...(todo.read_delegates || []), ...(todo.write_delegates || [])])]" :key="d">
-                          <span class="delegate-chip-readonly">
-                            <span x-text="$store.app.delegateProfiles[d]?.name || $store.app.delegateProfiles[d]?.npub || d.slice(0,8) + '...'"></span>
-                            <span class="badge-sm" x-text="(todo.write_delegates || []).includes(d) ? 'read+write' : 'read'"></span>
-                          </span>
-                        </template>
-                      </div>
                     </div>
 
                     <div class="edit-modal-actions">
                       <button type="submit" class="btn-update">Update</button>
-                      <button type="button" class="btn-delete" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
+                      <button type="button" class="btn-delete" @click="$store.app.deleteTodoItem(todo.record_id)">Delete</button>
                     </div>
                   </form>
                 </div>
@@ -320,9 +294,9 @@
             <template x-if="$store.app.doneTodos.length === 0">
               <li class="empty-state">Nothing archived yet.</li>
             </template>
-            <template x-for="todo in $store.app.doneTodos" :key="todo.id">
+            <template x-for="todo in $store.app.doneTodos" :key="todo.record_id">
               <li x-data="todoItem(todo)">
-                <div class="todo-row" @click="$store.app.openEditModal(todo.id)">
+                <div class="todo-row" @click="$store.app.openEditModal(todo.record_id)">
                   <span class="todo-title" x-text="todo.title"></span>
                   <span class="badges">
                     <span class="badge" :class="`priority-${todo.priority}`" x-text="$store.app.formatPriority(todo.priority)"></span>
@@ -336,7 +310,7 @@
                 <!-- Edit Modal (archive) -->
                 <div
                   class="modal-overlay"
-                  x-show="$store.app.editModalTodoId === todo.id"
+                  x-show="$store.app.editModalTodoId === todo.record_id"
                   @click.self="$store.app.closeEditModal()"
                   @keydown.escape.window="$store.app.closeEditModal()"
                 >
@@ -396,7 +370,7 @@
                         <button
                           type="button"
                           class="copy-link-btn"
-                          @click="$store.app.copyTodoLink(todo.id)"
+                          @click="$store.app.copyTodoLink(todo.record_id)"
                           title="Copy link to this task"
                         >
                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -409,7 +383,7 @@
 
                       <div class="edit-modal-actions">
                         <button type="submit" class="btn-update">Update</button>
-                        <button type="button" class="btn-delete" @click="$store.app.deleteTodoItem(todo.id)">Delete</button>
+                        <button type="button" class="btn-delete" @click="$store.app.deleteTodoItem(todo.record_id)">Delete</button>
                       </div>
                     </form>
                   </div>

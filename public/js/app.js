@@ -1,6 +1,6 @@
 // Main Alpine.js application
 import Alpine from 'https://esm.sh/alpinejs@3.14.8';
-import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState, addDelegateToTodo, removeDelegateFromTodo, migrateToV1 } from './db.js';
+import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState } from './db.js';
 import {
   signLoginEvent,
   getPubkeyFromEvent,
@@ -223,7 +223,7 @@ Alpine.store('app', {
     window.addEventListener('popstate', () => {
       const params = new URLSearchParams(window.location.search);
       const todoId = params.get('todo');
-      if (todoId && this.todos.some(t => t.id === todoId)) {
+      if (todoId && this.todos.some(t => t.record_id === todoId)) {
         this.editModalTodoId = todoId;
       } else {
         this.editModalTodoId = null;
@@ -377,21 +377,7 @@ Alpine.store('app', {
   async loadTodos() {
     if (!this.session?.npub) return;
 
-    // Lazy v0→v1 migration on first load
-    await migrateToV1(this.session.npub);
-
     this.todos = await getTodosByOwner(this.session.npub);
-
-    // Resolve delegate profiles for all todos
-    const seenPubkeys = new Set();
-    for (const todo of this.todos) {
-      for (const d of [...(todo.read_delegates || []), ...(todo.write_delegates || [])]) {
-        if (!seenPubkeys.has(d)) {
-          seenPubkeys.add(d);
-          this.resolveDelegateProfile(d);
-        }
-      }
-    }
 
     // Check SuperBased connection after todos are loaded
     if (!this.superbasedClient) {
@@ -402,24 +388,9 @@ Alpine.store('app', {
   async addTodo() {
     if (!this.newTodoTitle.trim() || !this.session?.npub) return;
 
-    // Derive delegates from server delegation list (source of truth)
-    const readDelegates = new Set();
-    const writeDelegates = new Set();
-    for (const d of this.delegations) {
-      if (d.delegate_pubkey) {
-        if (d.permissions?.includes('read')) readDelegates.add(d.delegate_pubkey);
-        if (d.permissions?.includes('write')) {
-          writeDelegates.add(d.delegate_pubkey);
-          readDelegates.add(d.delegate_pubkey); // write implies read
-        }
-      }
-    }
-
     await createTodo({
       title: this.newTodoTitle.trim(),
       owner: this.session.npub,
-      read_delegates: [...readDelegates],
-      write_delegates: [...writeDelegates],
     });
 
     this.newTodoTitle = '';
@@ -515,7 +486,7 @@ Alpine.store('app', {
   openTodoFromUrl() {
     const params = new URLSearchParams(window.location.search);
     const todoId = params.get('todo');
-    if (todoId && this.todos.some(t => t.id === todoId)) {
+    if (todoId && this.todos.some(t => t.record_id === todoId)) {
       this.editModalTodoId = todoId;
     }
   },
@@ -929,7 +900,7 @@ Alpine.store('app', {
         if (this.superbasedClient && !this.isSyncing) {
           this.syncNow(true).catch(() => {});
         }
-      }, 5000);
+      }, 3000);
     }
   },
 
@@ -987,7 +958,10 @@ Alpine.store('app', {
     const syncStartTime = Date.now();
 
     try {
-      const result = await performSync(this.superbasedClient, this.session.npub);
+      const delegatePubkeys = this.delegations
+        .filter(d => d.delegate_pubkey)
+        .map(d => d.delegate_pubkey);
+      const result = await performSync(this.superbasedClient, this.session.npub, delegatePubkeys);
 
       // Update last sync time for display
       this.lastSyncTime = new Date().toLocaleString();
@@ -998,8 +972,8 @@ Alpine.store('app', {
         this.hasUnsyncedChanges = false;
       }
 
-      // Reload UI if we pulled new records or updated existing ones (avoids unnecessary redraws)
-      if (result.pulled > 0 || result.updated > 0) {
+      // Reload UI if we pulled, updated, or deleted records (avoids unnecessary redraws)
+      if (result.pulled > 0 || result.updated > 0 || result.deletedLocally > 0) {
         this.todos = await getTodosByOwner(this.session.npub);
       }
 
@@ -1008,11 +982,6 @@ Alpine.store('app', {
         await this.syncNotifier.publish();
       }
 
-      // Notify delegates if there are task assignments
-      if (this.delegationNotifier && result.delegateNotifications?.length > 0) {
-        console.log(`Sync: Publishing ${result.delegateNotifications.length} delegation notification(s)`);
-        await this.delegationNotifier.publishAssignments(result.delegateNotifications);
-      }
     } catch (err) {
       // Silent fail for background polling, but keep hasUnsyncedChanges true
       if (!skipNotify) {
@@ -1116,29 +1085,6 @@ Alpine.store('app', {
           this.resolveDelegateProfile(d.delegate_pubkey);
         }
       }
-
-      // Reconcile: ensure all local Dexie records have current app-wide delegates
-      if (this.delegations.length > 0 && this.todos.length > 0) {
-        let reconciled = 0;
-        for (const todo of this.todos) {
-          for (const d of this.delegations) {
-            if (!d.delegate_pubkey) continue;
-            const hasWrite = d.permissions?.includes('write');
-            const needsAdd =
-              (hasWrite && !(todo.write_delegates || []).includes(d.delegate_pubkey)) ||
-              (!hasWrite && !(todo.read_delegates || []).includes(d.delegate_pubkey));
-            if (needsAdd) {
-              const perm = hasWrite ? 'write' : 'read';
-              await addDelegateToTodo(todo.id, d.delegate_pubkey, perm);
-              reconciled++;
-            }
-          }
-        }
-        if (reconciled > 0) {
-          console.log(`Delegations: Reconciled ${reconciled} missing delegate entries on local records`);
-          await this.loadTodos();
-        }
-      }
     } catch (err) {
       console.error('Failed to load delegations:', err);
       this.delegationError = err.message;
@@ -1171,48 +1117,12 @@ Alpine.store('app', {
         permissions
       );
 
-      // Convert npub to hex for per-record delegation
-      const { nip19 } = await loadNostrLibs();
-      let delegateHex = this.newDelegateNpub.trim();
-      if (delegateHex.startsWith('npub1')) {
-        const decoded = nip19.decode(delegateHex);
-        delegateHex = decoded.data;
-      }
-
-      // Add delegate to all current todos
-      const permission = this.delegatePermWrite ? 'write' : 'read';
-      const manifestRecords = [];
-      for (const todo of this.todos) {
-        try {
-          await addDelegateToTodo(todo.id, delegateHex, permission);
-          manifestRecords.push({
-            record_id: todo.id,
-            collection: 'todos',
-            access: permission,
-            delegated_at: new Date().toISOString(),
-          });
-        } catch (err) {
-          console.error(`Failed to add delegate to todo ${todo.id}:`, err);
-        }
-      }
-
-      // Publish delegation manifest to Nostr
-      if (this.delegationNotifier && manifestRecords.length > 0) {
-        const apiBaseUrl = this.superbasedClient?.config?.httpUrl || '';
-        await this.delegationNotifier.publishDelegationManifest(
-          delegateHex,
-          manifestRecords,
-          apiBaseUrl
-        );
-      }
-
       this.newDelegateNpub = '';
       this.delegatePermRead = true;
       this.delegatePermWrite = false;
       await this.loadDelegations();
-      await this.loadTodos();
 
-      // Trigger sync to push updated delegate payloads
+      // Trigger sync to re-encrypt records with the new delegate list
       if (this.superbasedClient && !this.isSyncing) {
         this.syncNow();
       }
@@ -1231,29 +1141,9 @@ Alpine.store('app', {
       const delegateNpub = nip19.npubEncode(delegatePubkey);
       await this.superbasedClient.revokeDelegation(delegateNpub);
 
-      // Remove delegate from all todos
-      for (const todo of this.todos) {
-        try {
-          await removeDelegateFromTodo(todo.id, delegatePubkey);
-        } catch (err) {
-          console.error(`Failed to remove delegate from todo ${todo.id}:`, err);
-        }
-      }
-
-      // Republish empty manifest (revokes all records for this delegate)
-      if (this.delegationNotifier) {
-        const apiBaseUrl = this.superbasedClient?.config?.httpUrl || '';
-        await this.delegationNotifier.publishDelegationManifest(
-          delegatePubkey,
-          [], // Empty records = revoked
-          apiBaseUrl
-        );
-      }
-
       await this.loadDelegations();
-      await this.loadTodos();
 
-      // Trigger sync to push updated records without delegate payloads
+      // Trigger sync to re-encrypt records without the revoked delegate
       if (this.superbasedClient && !this.isSyncing) {
         this.syncNow();
       }
@@ -1296,7 +1186,7 @@ Alpine.store('app', {
 
 // Todo item component
 Alpine.data('todoItem', (todo) => ({
-  todoId: todo.id,
+  todoId: todo.record_id,
   localTodo: { ...todo },
   tagInput: '',
   _lastSyncedAt: todo.updated_at,
@@ -1304,7 +1194,7 @@ Alpine.data('todoItem', (todo) => ({
   // Watch for external changes (sync) and refresh localTodo
   init() {
     // Initial sync - ensure localTodo has latest from store
-    const initialTodo = this.$store.app.todos.find(t => t.id === todo.id);
+    const initialTodo = this.$store.app.todos.find(t => t.record_id === todo.record_id);
     if (initialTodo) {
       this.localTodo = { ...initialTodo };
       this._lastSyncedAt = initialTodo.updated_at;
@@ -1312,7 +1202,7 @@ Alpine.data('todoItem', (todo) => ({
 
     // Watch for store changes
     this.$watch('$store.app.todos', () => {
-      const freshTodo = this.$store.app.todos.find(t => t.id === this.localTodo.id);
+      const freshTodo = this.$store.app.todos.find(t => t.record_id === this.localTodo.record_id);
       if (freshTodo && freshTodo.updated_at !== this._lastSyncedAt) {
         // External update detected - refresh localTodo
         this.localTodo = { ...freshTodo };
@@ -1329,45 +1219,17 @@ Alpine.data('todoItem', (todo) => ({
   async save() {
     const store = Alpine.store('app');
     try {
-      // Track old assigned_to for delegate cleanup
-      const storeTodo = store.todos.find(t => t.id === this.localTodo.id);
-      const oldAssignedTo = storeTodo?.assigned_to || null;
-      const newAssignedTo = this.localTodo.assigned_to || null;
-
-      await updateTodo(this.localTodo.id, {
+      await updateTodo(this.localTodo.record_id, {
         title: this.localTodo.title,
         description: this.localTodo.description,
         priority: this.localTodo.priority,
         state: this.localTodo.state,
         scheduled_for: this.localTodo.scheduled_for || null,
         tags: this.localTodo.tags,
-        assigned_to: newAssignedTo,
+        assigned_to: this.localTodo.assigned_to || null,
       });
 
-      // Auto-delegate based on assigned_to changes
-      if (newAssignedTo !== oldAssignedTo) {
-        const { nip19 } = await loadNostrLibs();
-
-        // Remove old assignee's delegation
-        if (oldAssignedTo) {
-          let oldHex = oldAssignedTo;
-          if (oldHex.startsWith('npub1')) {
-            oldHex = nip19.decode(oldHex).data;
-          }
-          await removeDelegateFromTodo(this.localTodo.id, oldHex);
-        }
-
-        // Add new assignee's delegation (write implies read)
-        if (newAssignedTo) {
-          let newHex = newAssignedTo;
-          if (newHex.startsWith('npub1')) {
-            newHex = nip19.decode(newHex).data;
-          }
-          await addDelegateToTodo(this.localTodo.id, newHex, 'write');
-        }
-      }
-
-      const savedId = this.localTodo.id;
+      const savedId = this.localTodo.record_id;
       store.closeEditModal();
 
       // Set BEFORE loadTodos so new component sees it on init

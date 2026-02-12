@@ -1,34 +1,8 @@
-// SuperBased Sync Client
-// Handles authenticated sync with flux_adaptor server
+// SuperBased Sync Client — v3
+// Handles authenticated sync with flux_adaptor server (append-only versioned records)
 
 import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes } from './nostr.js';
-import { getEncryptedTodosByOwner, importEncryptedTodos, db, formatTodosForDER, parseDERRecord, CURRENT_SCHEMA_VERSION } from './db.js';
-
-/**
- * Sanitize JSON string by escaping control characters
- * Fixes common issues from improperly escaped agent-written data
- */
-function sanitizePayload(str) {
-  if (!str || typeof str !== 'string') return str;
-  return str
-    .replace(/\r\n/g, '\\n')
-    .replace(/\r/g, '\\n')
-    .replace(/\n/g, '\\n')
-    .replace(/\t/g, '\\t')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-}
-
-// Device ID for tracking sync origin
-const DEVICE_ID_KEY = 'superbased_device_id';
-
-function getDeviceId() {
-  let deviceId = localStorage.getItem(DEVICE_ID_KEY);
-  if (!deviceId) {
-    deviceId = crypto.randomUUID();
-    localStorage.setItem(DEVICE_ID_KEY, deviceId);
-  }
-  return deviceId;
-}
+import { db, formatForV3Sync, parseV3Record } from './db.js';
 
 /**
  * Parse a SuperBased token (base64-encoded Nostr event)
@@ -74,7 +48,6 @@ async function createNip98Auth(url, method, body = null) {
   if (!secret) {
     // For extension users
     if (window.nostr?.signEvent) {
-      // Use memory pubkey if available, avoid getPublicKey() prompt
       const pubkey = memPubkey || await window.nostr.getPublicKey();
 
       const tags = [
@@ -82,7 +55,6 @@ async function createNip98Auth(url, method, body = null) {
         ['method', method],
       ];
 
-      // Add payload hash for POST/PUT/PATCH
       if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
         const encoder = new TextEncoder();
         const data = encoder.encode(body);
@@ -149,7 +121,7 @@ export class SuperBasedClient {
       throw new Error('Token missing HTTP URL');
     }
 
-    // Remove trailing slash from httpUrl to avoid double slashes
+    // Remove trailing slash from httpUrl
     this.baseUrl = this.config.httpUrl.replace(/\/+$/, '');
   }
 
@@ -227,7 +199,7 @@ export class SuperBasedClient {
   }
 
   /**
-   * Sync local todos to server
+   * Sync local todos to server (v3 format)
    */
   async syncRecords(records) {
     return this.request(`/records/${this.config.appNpub}/sync`, 'POST', { records });
@@ -288,212 +260,98 @@ export class SuperBasedClient {
 }
 
 /**
- * Convert local todos to DER v1 sync format
- * Encrypts payload with NIP-44 to owner + delegates
- */
-export async function todosToSyncRecords(ownerNpub) {
-  const storedTodos = await getEncryptedTodosByOwner(ownerNpub);
-  return formatTodosForDER(storedTodos);
-}
-
-/**
- * Convert sync records back to local todo format
- * Handles both v0 (encrypted_data) and v1 (encrypted_payload) formats
- * v1 records are decrypted via parseDERRecord
- */
-export async function syncRecordsToTodos(records) {
-  const results = [];
-  for (const record of records) {
-    const parsed = await parseDERRecord(record);
-    if (parsed) {
-      results.push({
-        id: parsed.id,
-        owner: parsed.owner,
-        payload: sanitizePayload(parsed.payload),
-        read_delegates: parsed.read_delegates || [],
-        write_delegates: parsed.write_delegates || [],
-        schema_version: parsed.schema_version || 0,
-        _remote_id: parsed.record_id,
-        _updated_at: parsed.updated_at,
-      });
-    }
-  }
-  return results;
-}
-
-/**
- * Perform full sync with pull-first strategy and DER v1 support.
+ * Perform full v3 sync: pull-first, then push pending.
  *
- * Strategy:
- * - PULL FIRST to see what server has
- * - Merge: take newer server versions into local (decrypt v1 records)
- * - THEN PUSH only records where local is newer (encrypt as v1)
+ * - PULL: fetch all server records, import new ones, overwrite if server version > local
+ * - Detect server-side deletes: synced records missing from server → delete locally
+ * - PUSH: send all pending local records, update local version from response
+ * - Terminal deletes: hard-delete locally after server confirms soft-deleted records
  *
- * Flow:
- * 1. Pull remote changes
- * 2. Merge: update local if server has newer version
- * 3. Push only records that are newer locally than what server has
+ * @param {SuperBasedClient} client
+ * @param {string} ownerNpub
+ * @param {string[]} delegatePubkeys - App-level delegate hex pubkeys for encryption
  */
-export async function performSync(client, ownerNpub, lastSyncTime = null) {
-  const deviceId = getDeviceId();
-
-  // 1. PULL FIRST - Fetch all remote records
-  const remoteData = await client.fetchRecords({});
-
-  // Build a map of server records for comparison
-  const serverRecords = new Map();
-  if (remoteData.records) {
-    for (const record of remoteData.records) {
-      serverRecords.set(record.record_id, record);
-    }
-  }
-
-  // 2. Merge remote records into local DB
-  let newRecordsAdded = 0;
-  let recordsUpdated = 0;
+export async function performSync(client, ownerNpub, delegatePubkeys = []) {
+  // 1. PULL
+  const remoteData = await client.fetchRecords({ collection: 'todos' });
+  let pulled = 0;
+  let updated = 0;
 
   for (const record of remoteData.records || []) {
-    // Match both numeric IDs (legacy) and hex UUIDs
-    const match = record.record_id.match(/^todo_([a-f0-9]+)$/i);
-    if (!match) continue;
+    const local = await db.todos.get(record.record_id);
 
-    const localId = match[1]; // Keep as string (UUID)
-    const serverUpdatedAt = record.updated_at;
-    const remoteDeviceId = record.metadata?.device_id;
-    const isV1 = record.metadata?.schema_version >= 1 && record.encrypted_data;
-
-    const existing = await db.todos.get(localId);
-
-    // Skip v0 records or records without encrypted data
-    if (!isV1) continue;
-
-    if (!existing) {
-      const parsed = await parseDERRecord(record);
+    if (!local) {
+      // New record from server — decrypt and import
+      const parsed = await parseV3Record(record);
       if (!parsed) continue;
-
       await db.todos.put({
-        id: localId,
-        owner: parsed.owner || record.metadata?.owner || ownerNpub,
+        record_id: record.record_id,
+        owner: ownerNpub,
         payload: parsed.payload,
-        schema_version: parsed.schema_version || 0,
-        read_delegates: parsed.read_delegates || [],
-        write_delegates: parsed.write_delegates || [],
-        server_updated_at: serverUpdatedAt,
+        version: record.version,
+        pending: false,
       });
-      newRecordsAdded++;
-      console.log(`Sync: Added new record ${localId} from server (v${parsed.schema_version || 0})`);
-    } else {
-      // Record exists locally - compare timestamps
-      const localServerTime = existing.server_updated_at
-        ? new Date(existing.server_updated_at).getTime()
-        : 0;
-      const remoteServerTime = serverUpdatedAt
-        ? new Date(serverUpdatedAt).getTime()
-        : 0;
+      pulled++;
+    } else if (record.version > local.version) {
+      // Server is newer — overwrite local
+      const parsed = await parseV3Record(record);
+      if (!parsed) continue;
+      await db.todos.put({
+        record_id: record.record_id,
+        owner: ownerNpub,
+        payload: parsed.payload,
+        version: record.version,
+        pending: false,
+      });
+      updated++;
+    }
+    // else: local.version == server.version — skip (pending edits will push)
+  }
 
-      // Skip if from same device (our own echo)
-      if (remoteDeviceId === deviceId) {
-        // Update server_updated_at to track sync
-        if (serverUpdatedAt && remoteServerTime > localServerTime) {
-          await db.todos.update(localId, { server_updated_at: serverUpdatedAt });
-        }
-        continue;
-      }
-
-      // Check if local has pending changes (edited since last sync)
-      let localHasPendingChanges = false;
-      if (existing.payload) {
-        try {
-          const parsed = JSON.parse(existing.payload);
-          const localUpdatedAt = parsed.updated_at || parsed.created_at;
-          if (localUpdatedAt) {
-            const localEditTime = new Date(localUpdatedAt).getTime();
-            localHasPendingChanges = localEditTime > localServerTime;
-          }
-        } catch (err) {
-          console.warn(`Sync: Can't parse local record ${localId}, assuming pending changes:`, err.message);
-          localHasPendingChanges = true;
-        }
-      }
-
-      // Take server version only if server is newer AND no pending local changes
-      if (remoteServerTime > localServerTime && !localHasPendingChanges) {
-        // Decrypt via parseDERRecord (handles both v0 and v1)
-        const parsed = await parseDERRecord(record);
-        if (!parsed) continue;
-
-        await db.todos.put({
-          id: localId,
-          owner: parsed.owner || record.metadata?.owner || ownerNpub,
-          payload: parsed.payload,
-          schema_version: parsed.schema_version || 0,
-          read_delegates: parsed.read_delegates || [],
-          write_delegates: parsed.write_delegates || [],
-          server_updated_at: serverUpdatedAt,
-        });
-        recordsUpdated++;
-        console.log(`Sync: Updated record ${localId} (server newer, v${parsed.schema_version || 0})`);
-      } else if (localHasPendingChanges) {
-        console.log(`Sync: Skipping server update for ${localId} - local has pending changes`);
-      }
+  // Handle server-side deletes: records we have locally that were synced (version > 0)
+  // but are absent from server response (server only returns live records)
+  const serverRecordIds = new Set((remoteData.records || []).map(r => r.record_id));
+  const allLocal = await db.todos.where('owner').equals(ownerNpub).toArray();
+  let deletedLocally = 0;
+  for (const local of allLocal) {
+    if (local.version > 0 && !serverRecordIds.has(local.record_id) && !local.pending) {
+      await db.todos.delete(local.record_id);
+      deletedLocally++;
     }
   }
 
-  // 3. PUSH only records that are newer locally
-  const allLocalTodos = await getEncryptedTodosByOwner(ownerNpub);
-  const todosToPush = [];
-
-  for (const todo of allLocalTodos) {
-    const recordId = `todo_${todo.id}`;
-    const serverRecord = serverRecords.get(recordId);
-
-    let localUpdatedAt = null;
-    try {
-      const parsed = JSON.parse(todo.payload);
-      localUpdatedAt = parsed.updated_at || parsed.created_at;
-    } catch {
-      // Unparseable payload (e.g. stale v0 encrypted data) — skip, don't push garbage
-      continue;
-    }
-
-    const localTime = localUpdatedAt ? new Date(localUpdatedAt).getTime() : 0;
-    const serverTime = serverRecord?.updated_at
-      ? new Date(serverRecord.updated_at).getTime()
-      : 0;
-    const localServerTime = todo.server_updated_at
-      ? new Date(todo.server_updated_at).getTime()
-      : 0;
-
-    // Push if: not on server, OR local is newer than BOTH server timestamp and our last push
-    if (!serverRecord || (localTime > serverTime && localTime > localServerTime)) {
-      todosToPush.push(todo);
-    }
-  }
-
+  // 2. PUSH
+  const pendingTodos = await db.todos.where('owner').equals(ownerNpub).filter(t => t.pending === true).toArray();
   let pushed = 0;
-  if (todosToPush.length > 0) {
-    // Encrypt and format as DER v1 before pushing
-    const recordsToPush = await formatTodosForDER(todosToPush);
-    const syncResponse = await client.syncRecords(recordsToPush);
-    pushed = recordsToPush.length;
-    console.log(`Sync: Pushed ${pushed} DER v1 records to server`, syncResponse);
 
-    // Check if server actually created/updated the records
-    if (syncResponse && (syncResponse.created === 0 && syncResponse.updated === 0)) {
-      console.warn('Sync: Server returned 0 created/updated - records may not have been saved!', syncResponse);
+  if (pendingTodos.length > 0) {
+    const records = await formatForV3Sync(pendingTodos, delegatePubkeys);
+    const syncResponse = await client.syncRecords(records);
+
+    // Update local versions from server response
+    for (const synced of syncResponse.synced || []) {
+      await db.todos.update(synced.record_id, {
+        version: synced.version,
+        pending: false,
+      });
     }
 
-    // Stamp server_updated_at on pushed records so they aren't re-pushed next cycle
-    const now = new Date().toISOString();
-    for (const todo of todosToPush) {
-      await db.todos.update(todo.id, { server_updated_at: now });
+    // Handle terminal deletes — if we pushed a soft-deleted record and server
+    // accepted it, hard-delete locally
+    for (const todo of pendingTodos) {
+      try {
+        const parsed = JSON.parse(todo.payload);
+        if (parsed.deleted === 1) {
+          const wasSynced = (syncResponse.synced || []).some(s => s.record_id === todo.record_id);
+          if (wasSynced) {
+            await db.todos.delete(todo.record_id);
+          }
+        }
+      } catch { /* ignore parse errors */ }
     }
+
+    pushed = pendingTodos.length;
   }
 
-  return {
-    pushed,
-    pulled: newRecordsAdded,
-    updated: recordsUpdated,
-    syncTime: new Date().toISOString(),
-  };
+  return { pushed, pulled, updated, deletedLocally };
 }

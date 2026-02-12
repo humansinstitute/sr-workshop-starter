@@ -1,4 +1,4 @@
-const CACHE_NAME = 'speedrun-todo-v71';
+const CACHE_NAME = 'speedrun-todo-v3-1';
 
 const ASSETS_TO_CACHE = [
   '/',
