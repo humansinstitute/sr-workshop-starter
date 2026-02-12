@@ -243,14 +243,14 @@ Controls the workflow status of the todo. Valid values:
 | Value | Meaning | When to use |
 |-------|---------|-------------|
 | `new` | Just created | Default for new todos |
-| `doing` | In progress | User has started working on it |
-| `blocked` | Waiting/stuck | Something is preventing progress |
+| `ready` | Ready to start | Triaged and ready for work |
+| `in_progress` | In progress | User has started working on it |
 | `review` | Ready for review | Work complete, needs verification |
 | `done` | Completed | Task is finished |
 
 To change status:
 ```json
-"state": "doing"
+"state": "in_progress"
 ```
 
 **Important**: When setting `state` to `"done"`, also set `"done": 1`. For any other state, set `"done": 0`.
@@ -416,7 +416,7 @@ All operations follow this pattern:
 ### Mark a todo as in progress
 
 Update the payload:
-- `"state": "doing"`
+- `"state": "in_progress"`
 - `"done": 0`
 - `"updated_at": "{current timestamp}"`
 

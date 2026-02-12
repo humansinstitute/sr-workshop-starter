@@ -1,12 +1,13 @@
 // State machine and formatting utilities
 
-export const TODO_STATES = ['new', 'ready', 'in_progress', 'done'];
+export const TODO_STATES = ['new', 'ready', 'in_progress', 'review', 'done'];
 export const TODO_PRIORITIES = ['rock', 'pebble', 'sand'];
 
 export const ALLOWED_STATE_TRANSITIONS = {
   new: ['ready'],
-  ready: ['in_progress', 'done'],
-  in_progress: ['done'],
+  ready: ['in_progress'],
+  in_progress: ['review', 'done'],
+  review: ['done', 'in_progress'],
   done: ['ready'],
 };
 
@@ -16,6 +17,7 @@ export function isAllowedTransition(current, next) {
 
 export function formatStateLabel(state) {
   if (state === 'in_progress') return 'In Progress';
+  if (state === 'review') return 'Review';
   return state.charAt(0).toUpperCase() + state.slice(1);
 }
 

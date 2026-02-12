@@ -295,6 +295,10 @@ li {
   background: #f0e8ff;
   border-color: #cdbdff;
 }
+.badge.state-review {
+  background: #fef3c7;
+  border-color: #fcd34d;
+}
 .badge.state-ready {
   background: #fff2f0;
   border-color: #ffcfc3;
