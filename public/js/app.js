@@ -215,6 +215,20 @@ Alpine.store('app', {
 
     // Check for existing SuperBased connection
     await this.checkSuperBasedConnection();
+
+    // Open todo from URL if ?todo=<id> is present
+    this.openTodoFromUrl();
+
+    // Handle browser back/forward
+    window.addEventListener('popstate', () => {
+      const params = new URLSearchParams(window.location.search);
+      const todoId = params.get('todo');
+      if (todoId && this.todos.some(t => t.id === todoId)) {
+        this.editModalTodoId = todoId;
+      } else {
+        this.editModalTodoId = null;
+      }
+    });
   },
 
   async maybeAutoLogin() {
@@ -484,10 +498,36 @@ Alpine.store('app', {
   // Edit modal methods
   openEditModal(todoId) {
     this.editModalTodoId = todoId;
+    const url = new URL(window.location);
+    url.searchParams.set('todo', todoId);
+    history.pushState({ todo: todoId }, '', url);
   },
 
   closeEditModal() {
+    if (!this.editModalTodoId) return;
     this.editModalTodoId = null;
+    const url = new URL(window.location);
+    url.searchParams.delete('todo');
+    history.pushState({}, '', url);
+  },
+
+  // Check URL for ?todo=<id> and open that modal
+  openTodoFromUrl() {
+    const params = new URLSearchParams(window.location.search);
+    const todoId = params.get('todo');
+    if (todoId && this.todos.some(t => t.id === todoId)) {
+      this.editModalTodoId = todoId;
+    }
+  },
+
+  async copyTodoLink(todoId) {
+    const url = new URL(window.location);
+    url.searchParams.set('todo', todoId);
+    try {
+      await navigator.clipboard.writeText(url.toString());
+    } catch {
+      prompt('Copy link:', url.toString());
+    }
   },
 
   toggleArchive() {

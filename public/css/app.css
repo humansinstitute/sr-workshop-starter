@@ -1129,6 +1129,45 @@ li {
   max-width: 480px;
   text-align: left;
 }
+
+/* Copy link + shared meta row */
+.edit-modal-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0;
+  border-top: 1px solid #f0f0f0;
+  margin-top: 0.25rem;
+}
+.copy-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease, background 120ms ease;
+}
+.copy-link-btn:hover {
+  color: var(--accent);
+  background: #eff6ff;
+}
+.delegate-status-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.share-icon-sm {
+  color: #a78bfa;
+  flex-shrink: 0;
+}
 .edit-modal-actions {
   display: flex;
   gap: 0.5rem;
