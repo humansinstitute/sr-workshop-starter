@@ -112,6 +112,31 @@ Use the `superbased_sync_records` MCP tool. It automatically:
 - Authenticates via NIP-98
 - Syncs the record to SuperBased
 
+### CRITICAL: Preserve Existing Field Values
+
+When updating a task, you **must** send back ALL fields with their current values. Only change the fields you intend to modify. **Do not guess or use defaults for fields you are not changing.**
+
+The correct workflow is:
+
+1. **Fetch** the current record via `superbased_fetch_records`
+2. **Parse** the `decrypted_payload` JSON
+3. **Copy every field exactly as-is** into your updated payload
+4. **Only modify the specific fields** relevant to your change
+5. **Update `updated_at`** to the current timestamp
+6. **Sync** the modified payload back
+
+**Fields agents commonly clobber by mistake:**
+
+| Field | Valid values | What goes wrong |
+|-------|-------------|-----------------|
+| `state` | `new`, `ready`, `in_progress`, `review`, `done` | Agent resets to `"new"` or `"ready"` when it should keep the current value |
+| `priority` | `sand`, `stone`, `iron`, `gold` | Agent resets to `"sand"` (default) instead of keeping the user's chosen priority |
+| `tags` | Comma-separated string | Agent sends `""` and wipes existing tags |
+| `assigned_to` | Hex pubkey or `null` | Agent sends `null` and unassigns the task |
+| `scheduled_for` | ISO8601 string or `null` | Agent sends `null` and removes the due date |
+
+**Example of what NOT to do:** If a task has `"priority": "gold"` and `"state": "in_progress"`, and you only want to update the `title`, do NOT send `"priority": "sand"` and `"state": "new"`. Copy the existing `"priority": "gold"` and `"state": "in_progress"` exactly.
+
 ### Example: Create a new task
 
 ```
@@ -139,7 +164,7 @@ superbased_sync_records(
 
 ### Example: Update an existing task
 
-First read the current record, then sync back with changes:
+**Always fetch first, then modify only what you need.** Every field in the payload below must come from the fetched record — only `state`, `done`, and `updated_at` are changed in this example. All other fields (`title`, `description`, `priority`, `tags`, `scheduled_for`, `assigned_to`, `created_at`) are preserved exactly from the original:
 
 ```
 superbased_sync_records(
@@ -173,7 +198,7 @@ superbased_sync_records(
 | `record_id` | **YES** | Format: `todo_{16-char-hex}`. Generate one for new records, reuse existing for updates. |
 | `plaintext_payload` | **YES** | JSON string with **all** todo fields (not just changed ones) |
 | `owner_pubkey` | **YES** | Hex pubkey from Agent Connect JSON `ownerPubkey` |
-| `collection` | Recommended | Use `"todos"` |
+| `collection` | **YES** | Always specify explicitly. Use `"todos"` — omitting defaults to `"default"` and moves the record out of its original collection. |
 | `delegate_pubkeys` | Recommended | Copy from existing record's `metadata.read_delegates` |
 | `metadata` | Recommended | Include `device_id: "agent"`, `schema_version: 1`, `updated_at` |
 
@@ -408,12 +433,13 @@ superbased_sync_records(
 
 ## Common Operations
 
-All operations follow this pattern:
-1. Fetch the record with `superbased_fetch_records`
-2. Parse `decrypted_payload` as JSON
-3. Modify the fields you need
-4. Update `updated_at` to current timestamp
-5. Sync back with `superbased_sync_records`
+All update operations **must** follow this pattern — never skip step 1:
+
+1. **Fetch** the record with `superbased_fetch_records`
+2. **Parse** `decrypted_payload` as JSON
+3. **Copy all fields as-is**, then modify only the fields you need to change
+4. **Update** `updated_at` to current timestamp
+5. **Sync back** with `superbased_sync_records` (include unchanged fields too)
 
 ### Mark a todo as in progress
 
@@ -483,8 +509,90 @@ Check `metadata.write_delegates` in the fetched record to confirm you have write
 - Set `device_id` to `"agent"` in metadata to identify agent-modified records
 - The `metadata.updated_at` should match the `updated_at` inside the payload
 - Never modify `created_at` after initial creation
-- Always include **all fields** in the payload when updating, not just changed ones
+- Always include **all fields** in the payload when updating, not just changed ones — **copy every field value from the fetched record**, then change only what you need
+- **Never substitute default values** (e.g. `"sand"`, `"new"`, `""`, `null`) for fields you haven't read from the current record
 - Preserve `delegate_pubkeys` from the original record when syncing back
+
+---
+
+## AI Reviews (`ai_reviews` Collection)
+
+Agents can write **review and summary records** that display as cards in the app above the todo list. These are stored in the `ai_reviews` collection on SuperBased and synced to the client automatically.
+
+### Data Model
+
+The encrypted payload must include a `_collection` discriminator field:
+
+```json
+{
+  "_collection": "ai_reviews",
+  "title": "Short one-line takeaway",
+  "description": "Markdown description with **bold**, *italic*, lists, etc.",
+  "review_type": "daily",
+  "date": "2026-02-14",
+  "created_at": "2026-02-14T08:00:00.000Z",
+  "updated_at": "2026-02-14T08:00:00.000Z"
+}
+```
+
+### Field Reference
+
+| Field | Required | Valid Values | Notes |
+|-------|----------|-------------|-------|
+| `_collection` | **YES** | `"ai_reviews"` | Must be exactly this string — used to distinguish from todos in the shared Dexie table |
+| `title` | **YES** | Any string | Short summary shown as card heading |
+| `description` | **YES** | Markdown string | Rendered as HTML in the app. Supports **bold**, *italic*, `code`, lists, links |
+| `review_type` | **YES** | `"daily"` or `"weekly"` | Displayed as a badge on the card |
+| `date` | **YES** | `YYYY-MM-DD` | The date the review covers. Used for sorting (newest first) |
+| `created_at` | **YES** | ISO8601 UTC | When the review was first written |
+| `updated_at` | **YES** | ISO8601 UTC | Must update on every change |
+
+### Creating an AI Review
+
+```
+superbased_sync_records(
+  app_npub: "<appNpub from Agent Connect JSON>",
+  base_url: "<superbasedURL from Agent Connect JSON>",
+  owner_pubkey: "<ownerPubkey from Agent Connect JSON>",
+  records: [
+    {
+      "plaintext_payload": "{\"_collection\":\"ai_reviews\",\"title\":\"Good momentum today\",\"description\":\"You completed **3 tasks** and moved 2 more to in-progress.\\n\\n- Finished the API refactor\\n- Closed 2 bug reports\\n- Started the auth migration\",\"review_type\":\"daily\",\"date\":\"2026-02-14\",\"created_at\":\"2026-02-14T20:00:00.000Z\",\"updated_at\":\"2026-02-14T20:00:00.000Z\"}",
+      "collection": "ai_reviews",
+      "delegate_pubkeys": ["<wingman delegate pubkey>"]
+    }
+  ]
+)
+```
+
+### Important Notes
+
+- **Always set `collection: "ai_reviews"`** in the sync call — this scopes the record on SuperBased. Omitting it defaults to `"default"` and the app will never see it.
+- **Always include `"_collection": "ai_reviews"`** inside the payload — this is how the client-side Dexie DB distinguishes reviews from todos in the shared table.
+- **Include `delegate_pubkeys`** so Wingman can decrypt the record on future fetches.
+- **`record_id` is auto-generated** if omitted. To update an existing review, pass the same `record_id`.
+- The app sorts reviews by `date` descending and displays them in a paging card. Users see the newest review first and can page through older ones.
+- Markdown in `description` is rendered via snarkdown — basic markdown (bold, italic, code, links, lists) is supported. HTML `<script>` tags are stripped.
+
+### Reading AI Reviews
+
+To fetch existing reviews (e.g. to check what's already been written):
+
+```
+superbased_fetch_records(
+  app_npub: "<appNpub from Agent Connect JSON>",
+  owner_pubkey: "<ownerPubkey from Agent Connect JSON>",
+  base_url: "<superbasedURL from Agent Connect JSON>",
+  collection: "ai_reviews"
+)
+```
+
+### Workflow: Writing a Daily Review
+
+1. Fetch todos via `superbased_fetch_records` with `collection: "todos"`
+2. Analyze the tasks — completions, state changes, priorities, patterns
+3. Optionally fetch existing `ai_reviews` to avoid duplicating today's review
+4. Write a review record via `superbased_sync_records` with `collection: "ai_reviews"`
+5. The app picks up the review on its next sync cycle (every 3 seconds)
 
 ---
 
@@ -492,8 +600,10 @@ Check `metadata.write_delegates` in the fetched record to confirm you have write
 
 | Operation | Tool | Key Parameters |
 |-----------|------|---------------|
-| Read tasks | `superbased_fetch_records` | `app_npub`, `owner_pubkey`, `base_url`, `collection` |
-| Create/Update tasks | `superbased_sync_records` | `app_npub`, `base_url`, `records` |
+| Read tasks | `superbased_fetch_records` | `app_npub`, `owner_pubkey`, `base_url`, `collection: "todos"` |
+| Create/Update tasks | `superbased_sync_records` | `app_npub`, `base_url`, `records` (with `collection: "todos"`) |
+| Read AI reviews | `superbased_fetch_records` | `app_npub`, `owner_pubkey`, `base_url`, `collection: "ai_reviews"` |
+| Write AI reviews | `superbased_sync_records` | `app_npub`, `base_url`, `records` (with `collection: "ai_reviews"`) |
 | Check API health | `superbased_health` | `base_url` (optional) |
 | NIP-98 auth (raw) | `sign_nip98` | `url`, `method` |
 | Decrypt messages | `nip44_decrypt` | `ciphertext`, `sender_pubkey` |
