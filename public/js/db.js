@@ -304,5 +304,64 @@ export async function parseV3Record(record) {
   }
 }
 
+// ===========================
+// AI Reviews (read-only from client)
+// ===========================
+
+const AI_REVIEW_ENCRYPTED_FIELDS = ['title', 'description', 'review_type', 'date', 'created_at', 'updated_at', '_collection'];
+
+/**
+ * Deserialize a stored Dexie row as an ai_review.
+ * Returns null if the record is not an ai_review.
+ */
+function deserializeAiReview(storedRow) {
+  if (!storedRow || !storedRow.payload) return null;
+  const deserialized = deserializeTodo(storedRow);
+  if (!deserialized || deserialized._collection !== 'ai_reviews') return null;
+  return deserialized;
+}
+
+/**
+ * Get all ai_reviews for an owner from the shared todos table.
+ */
+export async function getAiReviewsByOwner(owner) {
+  const all = await db.todos.where('owner').equals(owner).toArray();
+  return all.map(deserializeAiReview).filter(Boolean);
+}
+
+/**
+ * Format ai_review records for v3 sync (not typically needed — agent writes these).
+ * Included for completeness.
+ */
+export async function formatAiReviewsForV3Sync(storedRows, delegatePubkeys = []) {
+  const { encryptToSelf, encryptToRecipient, getMemoryPubkey } = await import('./nostr.js');
+  const myPubkey = getMemoryPubkey();
+  const results = [];
+
+  for (const row of storedRows) {
+    const encrypted_data = await encryptToSelf(row.payload);
+    const delegate_payloads = {};
+    for (const dp of delegatePubkeys) {
+      try {
+        delegate_payloads[dp] = await encryptToRecipient(row.payload, dp);
+      } catch (err) {
+        console.error(`ai_review sync: encrypt to delegate ${dp.slice(0, 8)} failed:`, err.message);
+      }
+    }
+
+    const record = {
+      record_id: row.record_id,
+      collection: 'ai_reviews',
+      encrypted_data,
+      encrypted_from: myPubkey,
+    };
+    if (Object.keys(delegate_payloads).length > 0) {
+      record.delegate_payloads = delegate_payloads;
+    }
+    results.push(record);
+  }
+  return results;
+}
+
 // Export db for direct access
 export { db };

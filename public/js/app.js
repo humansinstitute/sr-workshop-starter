@@ -1,6 +1,7 @@
 // Main Alpine.js application
 import Alpine from 'https://esm.sh/alpinejs@3.14.8';
-import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState } from './db.js';
+import { createTodo, getTodosByOwner, updateTodo, deleteTodo, transitionTodoState, getAiReviewsByOwner } from './db.js';
+import snarkdown from 'https://esm.sh/snarkdown@2.0.0';
 import {
   signLoginEvent,
   getPubkeyFromEvent,
@@ -122,6 +123,10 @@ Alpine.store('app', {
   isLoadingDelegations: false,
   delegatedTodos: [],
   delegateProfiles: {},
+
+  // AI Reviews
+  aiReviews: [],
+  aiReviewIndex: 0,
 
   // Edit modal
   editModalTodoId: null,
@@ -378,6 +383,7 @@ Alpine.store('app', {
     if (!this.session?.npub) return;
 
     this.todos = await getTodosByOwner(this.session.npub);
+    await this.loadAiReviews();
 
     // Check SuperBased connection after todos are loaded
     if (!this.superbasedClient) {
@@ -973,8 +979,10 @@ Alpine.store('app', {
       }
 
       // Reload UI if we pulled, updated, or deleted records (avoids unnecessary redraws)
-      if (result.pulled > 0 || result.updated > 0 || result.deletedLocally > 0) {
+      if (result.pulled > 0 || result.updated > 0 || result.deletedLocally > 0 ||
+          result.aiReviewsPulled > 0 || result.aiReviewsUpdated > 0) {
         this.todos = await getTodosByOwner(this.session.npub);
+        await this.loadAiReviews();
       }
 
       // Notify other devices if we pushed changes
@@ -1056,6 +1064,42 @@ Alpine.store('app', {
       console.error('SuperBased: Failed to fetch token from Nostr:', err);
       return null;
     }
+  },
+
+  // ===========================================
+  // AI Review Methods
+  // ===========================================
+
+  async loadAiReviews() {
+    if (!this.session?.npub) return;
+    const reviews = await getAiReviewsByOwner(this.session.npub);
+    // Sort by date descending (newest first)
+    reviews.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    this.aiReviews = reviews;
+    // Clamp index
+    if (this.aiReviewIndex >= this.aiReviews.length) {
+      this.aiReviewIndex = Math.max(0, this.aiReviews.length - 1);
+    }
+  },
+
+  get currentReview() {
+    if (this.aiReviews.length === 0) return null;
+    return this.aiReviews[this.aiReviewIndex] || null;
+  },
+
+  prevReview() {
+    if (this.aiReviewIndex > 0) this.aiReviewIndex--;
+  },
+
+  nextReview() {
+    if (this.aiReviewIndex < this.aiReviews.length - 1) this.aiReviewIndex++;
+  },
+
+  renderMarkdown(md) {
+    if (!md) return '';
+    // snarkdown returns HTML; sanitize script tags
+    const html = snarkdown(md);
+    return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
   },
 
   // ===========================================

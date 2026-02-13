@@ -2,7 +2,7 @@
 // Handles authenticated sync with flux_adaptor server (append-only versioned records)
 
 import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes } from './nostr.js';
-import { db, formatForV3Sync, parseV3Record } from './db.js';
+import { db, formatForV3Sync, parseV3Record, getAiReviewsByOwner } from './db.js';
 
 /**
  * Parse a SuperBased token (base64-encoded Nostr event)
@@ -353,5 +353,52 @@ export async function performSync(client, ownerNpub, delegatePubkeys = []) {
     pushed = pendingTodos.length;
   }
 
-  return { pushed, pulled, updated, deletedLocally };
+  // 3. PULL ai_reviews (read-only — agent writes these, we just import)
+  let aiReviewsPulled = 0;
+  let aiReviewsUpdated = 0;
+  try {
+    const aiData = await client.fetchRecords({ collection: 'ai_reviews' });
+    for (const record of aiData.records || []) {
+      const local = await db.todos.get(record.record_id);
+
+      if (!local) {
+        const parsed = await parseV3Record(record);
+        if (!parsed) continue;
+        await db.todos.put({
+          record_id: record.record_id,
+          owner: ownerNpub,
+          payload: parsed.payload,
+          version: record.version,
+          pending: false,
+        });
+        aiReviewsPulled++;
+      } else if (record.version > local.version) {
+        const parsed = await parseV3Record(record);
+        if (!parsed) continue;
+        await db.todos.put({
+          record_id: record.record_id,
+          owner: ownerNpub,
+          payload: parsed.payload,
+          version: record.version,
+          pending: false,
+        });
+        aiReviewsUpdated++;
+      }
+    }
+
+    // Detect server-side deletes for ai_reviews
+    const aiServerIds = new Set((aiData.records || []).map(r => r.record_id));
+    const localReviews = await getAiReviewsByOwner(ownerNpub);
+    for (const review of localReviews) {
+      const localRow = await db.todos.get(review.record_id);
+      if (localRow && localRow.version > 0 && !aiServerIds.has(review.record_id) && !localRow.pending) {
+        await db.todos.delete(review.record_id);
+        deletedLocally++;
+      }
+    }
+  } catch (err) {
+    console.error('ai_reviews pull failed (non-fatal):', err.message);
+  }
+
+  return { pushed, pulled, updated, deletedLocally, aiReviewsPulled, aiReviewsUpdated };
 }

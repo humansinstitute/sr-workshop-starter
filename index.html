@@ -144,6 +144,21 @@
     <!-- Hint when logged out -->
     <p class="hero-hint" x-show="!$store.app.isLoggedIn">Sign in above to add tasks.</p>
 
+    <!-- AI Review Card -->
+    <section class="ai-review-card" x-show="$store.app.isLoggedIn && $store.app.aiReviews.length > 0">
+      <div class="ai-review-header">
+        <span class="ai-review-type" x-text="$store.app.currentReview?.review_type || 'review'"></span>
+        <span class="ai-review-date" x-text="$store.app.currentReview?.date || ''"></span>
+      </div>
+      <h3 class="ai-review-title" x-text="$store.app.currentReview?.title || ''"></h3>
+      <div class="ai-review-body" x-html="$store.app.renderMarkdown($store.app.currentReview?.description)"></div>
+      <div class="ai-review-nav" x-show="$store.app.aiReviews.length > 1">
+        <button type="button" @click="$store.app.prevReview()" :disabled="$store.app.aiReviewIndex === 0">&larr;</button>
+        <span x-text="`${$store.app.aiReviewIndex + 1} of ${$store.app.aiReviews.length}`"></span>
+        <button type="button" @click="$store.app.nextReview()" :disabled="$store.app.aiReviewIndex >= $store.app.aiReviews.length - 1">&rarr;</button>
+      </div>
+    </section>
+
     <!-- Work Section -->
     <section class="work" x-show="$store.app.isLoggedIn">
       <div class="work-header">
@@ -212,7 +227,9 @@
                     </label>
                     <label>
                       Description
-                      <textarea x-model="localTodo.description" rows="3"></textarea>
+                      <textarea x-model="localTodo.description" class="auto-expand" rows="3"
+                        x-effect="if ($store.app.editModalTodoId === todo.record_id) $nextTick(() => { $el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px' })"
+                        x-on:input="$el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'"></textarea>
                     </label>
                     <label>
                       Priority
@@ -323,7 +340,9 @@
                       </label>
                       <label>
                         Description
-                        <textarea x-model="localTodo.description" rows="3"></textarea>
+                        <textarea x-model="localTodo.description" class="auto-expand" rows="3"
+                        x-effect="if ($store.app.editModalTodoId === todo.record_id) $nextTick(() => { $el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px' })"
+                        x-on:input="$el.style.height = 'auto'; $el.style.height = $el.scrollHeight + 'px'"></textarea>
                       </label>
                       <label>
                         Priority
