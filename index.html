@@ -145,17 +145,41 @@
     <p class="hero-hint" x-show="!$store.app.isLoggedIn">Sign in above to add tasks.</p>
 
     <!-- AI Review Card -->
-    <section class="ai-review-card" x-show="$store.app.isLoggedIn && $store.app.aiReviews.length > 0">
-      <div class="ai-review-header">
+    <section
+      class="ai-review-card"
+      x-show="$store.app.isLoggedIn && $store.app.aiReviews.length > 0"
+      x-data="{ viewState: 'preview' }"
+      :class="{ 'is-collapsed': viewState === 'collapsed', 'is-expanded': viewState === 'expanded' }"
+    >
+      <div
+        class="ai-review-header"
+        @click="viewState = viewState === 'collapsed' ? 'preview' : 'collapsed'"
+        style="cursor: pointer;"
+      >
         <span class="ai-review-type" x-text="$store.app.currentReview?.review_type || 'review'"></span>
         <span class="ai-review-date" x-text="$store.app.currentReview?.date || ''"></span>
+        <span class="ai-review-collapse-hint" x-text="viewState === 'collapsed' ? '+' : '−'"></span>
       </div>
-      <h3 class="ai-review-title" x-text="$store.app.currentReview?.title || ''"></h3>
-      <div class="ai-review-body" x-html="$store.app.renderMarkdown($store.app.currentReview?.description)"></div>
-      <div class="ai-review-nav" x-show="$store.app.aiReviews.length > 1">
-        <button type="button" @click="$store.app.prevReview()" :disabled="$store.app.aiReviewIndex === 0">&larr;</button>
-        <span x-text="`${$store.app.aiReviewIndex + 1} of ${$store.app.aiReviews.length}`"></span>
-        <button type="button" @click="$store.app.nextReview()" :disabled="$store.app.aiReviewIndex >= $store.app.aiReviews.length - 1">&rarr;</button>
+      <div x-show="viewState !== 'collapsed'">
+        <h3 class="ai-review-title" x-text="$store.app.currentReview?.title || ''"></h3>
+        <div
+          class="ai-review-body"
+          :class="{ 'is-preview': viewState === 'preview' }"
+          x-html="$store.app.renderMarkdown($store.app.currentReview?.description)"
+          @click="viewState = viewState === 'preview' ? 'expanded' : 'preview'"
+          style="cursor: pointer;"
+        ></div>
+        <button
+          class="ai-review-read-more"
+          x-show="viewState === 'preview'"
+          @click="viewState = 'expanded'"
+          type="button"
+        >read more</button>
+        <div class="ai-review-nav" x-show="$store.app.aiReviews.length > 1">
+          <button type="button" @click="$store.app.prevReview(); viewState = 'preview'" :disabled="$store.app.aiReviewIndex === 0">&larr;</button>
+          <span x-text="`${$store.app.aiReviewIndex + 1} of ${$store.app.aiReviews.length}`"></span>
+          <button type="button" @click="$store.app.nextReview(); viewState = 'preview'" :disabled="$store.app.aiReviewIndex >= $store.app.aiReviews.length - 1">&rarr;</button>
+        </div>
       </div>
     </section>
 
