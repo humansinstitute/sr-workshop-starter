@@ -71,6 +71,7 @@ bun run test -- --reporter=verbose  # Detailed output
 - Sensitive fields (title, description, etc.) encrypted with NIP-44
 - `owner` field stored in plaintext for querying
 - No server-side database - data persists locally in the browser
+- **ALWAYS specify `collection: "todos"` when calling `superbased_sync_records`** — omitting it defaults to `"default"` and silently moves the record out of the app's collection. When unsure which collection to use, default to `"todos"`.
 
 ## UI Patterns
 
