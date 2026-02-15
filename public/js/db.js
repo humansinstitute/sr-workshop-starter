@@ -119,8 +119,10 @@ export async function createTodo({ title, description = '', priority = 'sand', o
 export async function getTodosByOwner(owner, includeDeleted = false) {
   const storedTodos = await db.todos.where('owner').equals(owner).toArray();
   const todos = deserializeTodos(storedTodos);
-  if (includeDeleted) return todos;
-  return todos.filter(t => !t.deleted);
+  // Only include actual todos (no _collection, or explicitly 'todos')
+  const filtered = todos.filter(t => !t._collection || t._collection === 'todos');
+  if (includeDeleted) return filtered;
+  return filtered.filter(t => !t.deleted);
 }
 
 export async function getTodoById(record_id) {
@@ -361,6 +363,24 @@ export async function formatAiReviewsForV3Sync(storedRows, delegatePubkeys = [])
     results.push(record);
   }
   return results;
+}
+
+/**
+ * Format ALL local records for delegate re-encryption sync.
+ * Used after delegate changes to push updated delegate_payloads for every record.
+ * Filters out soft-deleted records (no point re-encrypting those).
+ *
+ * @param {string} ownerNpub - Owner npub to query records for
+ * @param {string[]} delegatePubkeys - Current delegate hex pubkeys
+ * @returns {Array} v3 wire format records for SuperBased sync
+ */
+export async function formatAllForDelegateSync(ownerNpub, delegatePubkeys = []) {
+  const allTodos = await db.todos.where('owner').equals(ownerNpub).toArray();
+  // Filter out soft-deleted records
+  const liveTodos = allTodos.filter(t => {
+    try { return JSON.parse(t.payload).deleted !== 1; } catch { return true; }
+  });
+  return formatForV3Sync(liveTodos, delegatePubkeys);
 }
 
 // Export db for direct access
