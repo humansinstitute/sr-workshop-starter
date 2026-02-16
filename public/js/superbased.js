@@ -2,7 +2,7 @@
 // Handles authenticated sync with flux_adaptor server (append-only versioned records)
 
 import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes } from './nostr.js';
-import { db, formatForV3Sync, parseV3Record, getAiReviewsByOwner } from './db.js';
+import { db, formatForV3Sync, formatAllForDelegateSync, parseV3Record, getAiReviewsByOwner } from './db.js';
 
 /**
  * Parse a SuperBased token (base64-encoded Nostr event)
@@ -401,4 +401,35 @@ export async function performSync(client, ownerNpub, delegatePubkeys = []) {
   }
 
   return { pushed, pulled, updated, deletedLocally, aiReviewsPulled, aiReviewsUpdated };
+}
+
+/**
+ * Batch re-encrypt ALL records with the current delegate set and push to SuperBased.
+ * Used after delegate additions/revocations so delegate_payloads are up-to-date.
+ *
+ * @param {SuperBasedClient} client
+ * @param {string} ownerNpub
+ * @param {string[]} delegatePubkeys - Current delegate hex pubkeys
+ * @param {function} [onProgress] - Optional callback: (synced, total) => void
+ * @returns {{ total: number, synced: number }}
+ */
+export async function batchSyncDelegatePayloads(client, ownerNpub, delegatePubkeys = [], onProgress = null) {
+  const records = await formatAllForDelegateSync(ownerNpub, delegatePubkeys);
+  const BATCH_SIZE = 50;
+  let synced = 0;
+
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const batch = records.slice(i, i + BATCH_SIZE);
+    const response = await client.syncRecords(batch);
+
+    // Update local versions from response
+    for (const s of response.synced || []) {
+      await db.todos.update(s.record_id, { version: s.version, pending: false });
+    }
+
+    synced += batch.length;
+    if (onProgress) onProgress(synced, records.length);
+  }
+
+  return { total: records.length, synced };
 }

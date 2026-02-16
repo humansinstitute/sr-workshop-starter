@@ -703,6 +703,14 @@
               </li>
             </template>
           </ul>
+
+          <!-- Delegate re-encrypt progress -->
+          <p
+            class="delegate-reencrypt-status"
+            x-show="$store.app.delegateReEncryptProgress"
+            x-text="$store.app.delegateReEncryptProgress"
+            x-transition
+          ></p>
         </div>
       </div>
     </div>

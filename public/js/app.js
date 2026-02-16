@@ -44,6 +44,7 @@ import {
   SuperBasedClient,
   parseToken,
   performSync,
+  batchSyncDelegatePayloads,
 } from './superbased.js';
 import { SyncNotifier, DelegationNotifier } from './sync-notifier.js';
 import {
@@ -123,6 +124,7 @@ Alpine.store('app', {
   isLoadingDelegations: false,
   delegatedTodos: [],
   delegateProfiles: {},
+  delegateReEncryptProgress: null,
 
   // AI Reviews
   aiReviews: [],
@@ -1166,10 +1168,8 @@ Alpine.store('app', {
       this.delegatePermWrite = false;
       await this.loadDelegations();
 
-      // Trigger sync to re-encrypt records with the new delegate list
-      if (this.superbasedClient && !this.isSyncing) {
-        this.syncNow();
-      }
+      // Batch re-encrypt all records with updated delegate list
+      await this.reEncryptForDelegates();
     } catch (err) {
       console.error('Failed to grant delegation:', err);
       this.delegationError = err.message;
@@ -1187,13 +1187,45 @@ Alpine.store('app', {
 
       await this.loadDelegations();
 
-      // Trigger sync to re-encrypt records without the revoked delegate
-      if (this.superbasedClient && !this.isSyncing) {
-        this.syncNow();
-      }
+      // Batch re-encrypt all records without the revoked delegate
+      await this.reEncryptForDelegates();
     } catch (err) {
       console.error('Failed to revoke delegation:', err);
       this.delegationError = err.message;
+    }
+  },
+
+  async reEncryptForDelegates() {
+    if (!this.superbasedClient || !this.session?.npub) return;
+
+    const delegatePubkeys = this.delegations
+      .filter(d => d.delegate_pubkey)
+      .map(d => d.delegate_pubkey);
+
+    this.delegateReEncryptProgress = 'Re-encrypting records for updated delegates...';
+
+    try {
+      const result = await batchSyncDelegatePayloads(
+        this.superbasedClient,
+        this.session.npub,
+        delegatePubkeys,
+        (synced, total) => {
+          this.delegateReEncryptProgress = `Re-encrypting records... ${synced}/${total}`;
+        }
+      );
+
+      this.delegateReEncryptProgress = `Done — ${result.synced} record${result.synced !== 1 ? 's' : ''} updated`;
+      console.log(`Delegate re-encrypt complete: ${result.synced}/${result.total} records`);
+
+      setTimeout(() => {
+        this.delegateReEncryptProgress = null;
+      }, 5000);
+    } catch (err) {
+      console.error('Delegate re-encrypt failed:', err);
+      this.delegateReEncryptProgress = `Re-encrypt failed: ${err.message}`;
+      setTimeout(() => {
+        this.delegateReEncryptProgress = null;
+      }, 5000);
     }
   },
 

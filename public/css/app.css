@@ -1079,6 +1079,16 @@ li {
   border: none;
 }
 
+.delegate-reencrypt-status {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: #1e40af;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+}
+
 /* Assigned-to field in todo edit form */
 .assigned-to-field input {
   font-family: monospace;
