@@ -171,24 +171,40 @@ export class SyncNotifier {
       return [];
     }
 
-    const filter = {
+    const addressedToMeFilter = {
       kinds: [DELEGATION_MANIFEST_KIND],
       '#p': [this.userPubkeyHex],
-      '#t': ['der-delegation'],
+      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
+      limit: 500,
+    };
+    const authoredByMeFilter = {
+      kinds: [DELEGATION_MANIFEST_KIND],
+      authors: [this.userPubkeyHex],
       since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
       limit: 500,
     };
 
     try {
-      const events = await Promise.race([
-        this.relayPool.querySync(DELEGATION_RELAYS, filter),
-        new Promise((resolve) => setTimeout(() => resolve([]), 8000)),
+      const [addressedToMeEvents, authoredByMeEvents] = await Promise.race([
+        Promise.all([
+          this.relayPool.querySync(DELEGATION_RELAYS, addressedToMeFilter),
+          this.relayPool.querySync(DELEGATION_RELAYS, authoredByMeFilter),
+        ]),
+        new Promise((resolve) => setTimeout(() => resolve([[], []]), 8000)),
       ]);
 
       const unique = new Set();
-      for (const event of events || []) {
+      for (const event of addressedToMeEvents || []) {
+        // Old-style discovery: delegate publishes and tags us
         if (event?.pubkey && event.pubkey !== this.userPubkeyHex) {
           unique.add(event.pubkey);
+        }
+      }
+      for (const event of authoredByMeEvents || []) {
+        // Common pattern: we publish manifest and tag delegates in `p` tags
+        for (const tag of event?.tags || []) {
+          if (tag[0] !== 'p' || !tag[1] || tag[1] === this.userPubkeyHex) continue;
+          unique.add(tag[1]);
         }
       }
       return Array.from(unique);
