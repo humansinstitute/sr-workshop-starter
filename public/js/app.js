@@ -122,6 +122,8 @@ Alpine.store('app', {
   delegatePermWrite: false,
   delegationError: null,
   isLoadingDelegations: false,
+  isDiscoveringDelegates: false,
+  discoveredDelegatePubkeys: [],
   delegatedTodos: [],
   delegateProfiles: {},
   delegateReEncryptProgress: null,
@@ -1142,8 +1144,37 @@ Alpine.store('app', {
     this.newDelegateNpub = '';
     this.delegatePermRead = true;
     this.delegatePermWrite = false;
+    this.discoveredDelegatePubkeys = [];
     this.showDelegationsModal = true;
     this.loadDelegations();
+    this.discoverDelegatesFromNostr();
+  },
+
+  async discoverDelegatesFromNostr() {
+    if (!this.delegationNotifier?.discoverDelegatePubkeys) return;
+
+    this.isDiscoveringDelegates = true;
+    try {
+      const pubkeys = await this.delegationNotifier.discoverDelegatePubkeys();
+      const alreadyDelegated = new Set((this.delegations || []).map(d => d.delegate_pubkey));
+      this.discoveredDelegatePubkeys = pubkeys.filter(pk => !alreadyDelegated.has(pk));
+      for (const hex of this.discoveredDelegatePubkeys) {
+        this.resolveDelegateProfile(hex);
+      }
+    } catch (err) {
+      console.error('Failed to discover delegates from Nostr:', err);
+    } finally {
+      this.isDiscoveringDelegates = false;
+    }
+  },
+
+  async useDiscoveredDelegate(hexPubkey) {
+    try {
+      const { nip19 } = await loadNostrLibs();
+      this.newDelegateNpub = nip19.npubEncode(hexPubkey);
+    } catch (err) {
+      console.error('Failed to convert discovered delegate pubkey:', err);
+    }
   },
 
   async loadDelegations() {

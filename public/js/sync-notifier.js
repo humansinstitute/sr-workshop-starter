@@ -161,6 +161,43 @@ export class SyncNotifier {
     this.subscriptions.push(sub);
   }
 
+  /**
+   * Discover delegate/pubkey relationships from kind 30078 events
+   * addressed to the current user.
+   * Returns unique hex pubkeys (event authors), excluding self.
+   */
+  async discoverDelegatePubkeys() {
+    if (!this.relayPool || !this.userPubkeyHex) {
+      return [];
+    }
+
+    const filter = {
+      kinds: [DELEGATION_MANIFEST_KIND],
+      '#p': [this.userPubkeyHex],
+      '#t': ['der-delegation'],
+      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
+      limit: 500,
+    };
+
+    try {
+      const events = await Promise.race([
+        this.relayPool.querySync(DELEGATION_RELAYS, filter),
+        new Promise((resolve) => setTimeout(() => resolve([]), 8000)),
+      ]);
+
+      const unique = new Set();
+      for (const event of events || []) {
+        if (event?.pubkey && event.pubkey !== this.userPubkeyHex) {
+          unique.add(event.pubkey);
+        }
+      }
+      return Array.from(unique);
+    } catch (err) {
+      console.warn('DelegationNotifier: discovery failed:', err.message);
+      return [];
+    }
+  }
+
   async handleEvent(event) {
     const { nip44 } = await loadNostrLibs();
     const secret = getMemorySecret();

@@ -661,6 +661,22 @@
             <button class="auth-option" type="submit">Grant Access</button>
           </form>
           <p class="auth-error" x-show="$store.app.delegationError" x-text="$store.app.delegationError"></p>
+
+          <div class="discovered-delegates">
+            <h4>Suggested Bots (Kind 30078)</h4>
+            <div x-show="$store.app.isDiscoveringDelegates" class="loading">Discovering...</div>
+            <div x-show="!$store.app.isDiscoveringDelegates && $store.app.discoveredDelegatePubkeys.length === 0" class="empty-delegations">
+              No suggestions found
+            </div>
+            <ul class="delegate-suggestions" x-show="!$store.app.isDiscoveringDelegates && $store.app.discoveredDelegatePubkeys.length > 0">
+              <template x-for="pubkey in $store.app.discoveredDelegatePubkeys" :key="pubkey">
+                <li class="delegate-suggestion-item">
+                  <span class="delegation-npub" x-text="$store.app.delegateProfiles[pubkey]?.name || $store.app.delegateProfiles[pubkey]?.npub || $store.app.formatNpubShort(pubkey)"></span>
+                  <button class="auth-option secondary" type="button" @click="$store.app.useDiscoveredDelegate(pubkey)">Use</button>
+                </li>
+              </template>
+            </ul>
+          </div>
         </div>
 
         <!-- Current Delegations -->
