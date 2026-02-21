@@ -697,7 +697,7 @@ Alpine.store('app', {
     this.agentConfigCopied = false;
 
     // Decode appNpub to hex pubkey so agents don't need to convert
-    const appNpub = this.superbasedClient?.config?.appNpub || '';
+    const appNpub = this.superbasedClient?.config?.appNpub || EXPECTED_APP_NPUB || '';
     let appPubkey = '';
     if (appNpub) {
       try {
@@ -796,7 +796,7 @@ Alpine.store('app', {
       // Validate token by parsing it
       const config = parseToken(token);
       if (!config.isValid) {
-        throw new Error('Invalid token - missing attestation');
+        throw new Error('Invalid token - missing HTTP endpoint');
       }
 
       // Try to create client and test connection
@@ -810,8 +810,9 @@ Alpine.store('app', {
       this.superbasedConnected = true;
 
       // Publish token to Nostr for cross-device sync (in background)
-      if (config.appNpub && config.httpUrl) {
-        publishSuperBasedToken(token, config.appNpub, config.httpUrl).catch(err => {
+      const tokenKeyNpub = config.appNpub || EXPECTED_APP_NPUB || config.serverNpub;
+      if (tokenKeyNpub && config.httpUrl) {
+        publishSuperBasedToken(token, tokenKeyNpub, config.httpUrl).catch(err => {
           console.error('SuperBased: Failed to publish token to Nostr:', err);
           // Non-fatal - local storage still works
         });
@@ -850,8 +851,9 @@ Alpine.store('app', {
 
       // Initialize SyncNotifier in background (don't block connection)
       const config = parseToken(token);
-      if (config.appNpub) {
-        this.initSyncNotifier(config.appNpub);
+      const notifierNamespace = config.appNpub || EXPECTED_APP_NPUB || config.serverNpub;
+      if (notifierNamespace) {
+        this.initSyncNotifier(notifierNamespace);
       }
     } catch (err) {
       console.error('SuperBased: Failed to initialize client:', err);
@@ -934,9 +936,10 @@ Alpine.store('app', {
 
     // Optionally delete from Nostr
     if (deleteFromNostr && this.superbasedClient) {
-      const { appNpub, httpUrl } = this.superbasedClient.config || {};
-      if (appNpub && httpUrl) {
-        deleteSuperBasedToken(appNpub, httpUrl).catch(err => {
+      const { appNpub, serverNpub, httpUrl } = this.superbasedClient.config || {};
+      const tokenKeyNpub = appNpub || EXPECTED_APP_NPUB || serverNpub;
+      if (tokenKeyNpub && httpUrl) {
+        deleteSuperBasedToken(tokenKeyNpub, httpUrl).catch(err => {
           console.error('SuperBased: Failed to delete token from Nostr:', err);
         });
       }

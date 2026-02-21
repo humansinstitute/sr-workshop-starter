@@ -5,24 +5,41 @@ import { loadNostrLibs, getMemorySecret, getMemoryPubkey, bytesToHex, hexToBytes
 import { db, formatForV3Sync, formatAllForDelegateSync, parseV3Record, getAiReviewsByOwner } from './db.js';
 
 /**
- * Parse a SuperBased token (base64-encoded Nostr event)
+ * Parse a SuperBased connection token.
+ * Supports:
+ * - New format: base64(json) with type=superbased_connection
+ * - Legacy format: base64(Nostr event JSON with tags)
  */
 export function parseToken(tokenBase64) {
   try {
-    const eventJson = atob(tokenBase64);
-    const event = JSON.parse(eventJson);
+    const decodedJson = atob(tokenBase64);
+    const parsed = JSON.parse(decodedJson);
 
-    // Extract attestation
-    const attestationTag = event.tags.find(t => t[0] === 'attestation');
+    // New metadata-only connection token
+    if (parsed && parsed.type === 'superbased_connection') {
+      return {
+        rawToken: parsed,
+        isValid: !!parsed.http,
+        tokenType: parsed.type,
+        serverNpub: parsed.server_npub || null,
+        appNpub: parsed.app_npub || null,
+        relayUrl: parsed.relay || null,
+        httpUrl: parsed.http || null,
+      };
+    }
 
+    // Legacy signed token event
+    const event = parsed;
+    const tags = Array.isArray(event.tags) ? event.tags : [];
     return {
       rawEvent: event,
-      isValid: !!attestationTag,
+      isValid: !!tags.find(t => t[0] === 'http'),
+      tokenType: 'legacy_event',
       serverPubkeyHex: event.pubkey,
-      serverNpub: event.tags.find(t => t[0] === 'server')?.[1],
-      appNpub: event.tags.find(t => t[0] === 'app')?.[1],
-      relayUrl: event.tags.find(t => t[0] === 'relay')?.[1],
-      httpUrl: event.tags.find(t => t[0] === 'http')?.[1],
+      serverNpub: tags.find(t => t[0] === 'server')?.[1],
+      appNpub: tags.find(t => t[0] === 'app')?.[1],
+      relayUrl: tags.find(t => t[0] === 'relay')?.[1],
+      httpUrl: tags.find(t => t[0] === 'http')?.[1],
     };
   } catch (err) {
     console.error('Token parse error:', err);
@@ -202,7 +219,7 @@ export class SuperBasedClient {
    * Sync local todos to server (v3 format)
    */
   async syncRecords(records) {
-    return this.request(`/records/${this.config.appNpub}/sync`, 'POST', { records });
+    return this.request('/records/sync', 'POST', { records });
   }
 
   /**
@@ -214,7 +231,7 @@ export class SuperBasedClient {
     if (options.since) params.set('since', options.since);
 
     const queryString = params.toString();
-    const path = `/records/${this.config.appNpub}/fetch${queryString ? '?' + queryString : ''}`;
+    const path = `/records/fetch${queryString ? '?' + queryString : ''}`;
 
     return this.request(path, 'GET');
   }
@@ -223,7 +240,7 @@ export class SuperBasedClient {
    * Grant delegation to another npub
    */
   async grantDelegation(delegateNpub, permissions) {
-    return this.request(`/apps/${this.config.appNpub}/delegate`, 'POST', {
+    return this.request('/delegations', 'POST', {
       delegate_npub: delegateNpub,
       permissions: permissions,
     });
@@ -233,14 +250,14 @@ export class SuperBasedClient {
    * List delegations granted by the current user
    */
   async listDelegations() {
-    return this.request(`/apps/${this.config.appNpub}/delegations`, 'GET');
+    return this.request('/delegations', 'GET');
   }
 
   /**
    * Revoke a delegation
    */
   async revokeDelegation(delegateNpub) {
-    return this.request(`/apps/${this.config.appNpub}/delegate/${delegateNpub}`, 'DELETE');
+    return this.request(`/delegations/${delegateNpub}`, 'DELETE');
   }
 
   /**
@@ -248,12 +265,13 @@ export class SuperBasedClient {
    */
   async fetchDelegatedRecords(options = {}) {
     const params = new URLSearchParams();
-    params.set('delegate', 'true');
     if (options.collection) params.set('collection', options.collection);
-    if (options.since) params.set('since', options.since);
+    if (options.owner) params.set('owner', options.owner);
+    if (options.limit) params.set('limit', String(options.limit));
+    if (options.cursor) params.set('cursor', options.cursor);
 
     const queryString = params.toString();
-    const path = `/records/${this.config.appNpub}/fetch?${queryString}`;
+    const path = `/records/delegated${queryString ? '?' + queryString : ''}`;
 
     return this.request(path, 'GET');
   }
