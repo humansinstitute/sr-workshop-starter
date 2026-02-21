@@ -575,20 +575,6 @@
           </div>
         </div>
 
-        <!-- Quick Connect (when not connected) -->
-        <div x-show="!$store.app.superbasedConnected" class="superbased-quick-connect">
-          <button
-            class="auth-option otherstuff-connect"
-            type="button"
-            @click="$store.app.connectWithOtherStuff()"
-            :disabled="$store.app.isSavingSuperBased"
-          >
-            <span x-show="!$store.app.isSavingSuperBased">Connect with OtherStuff Superbased</span>
-            <span x-show="$store.app.isSavingSuperBased">Connecting...</span>
-          </button>
-          <p class="quick-connect-divider">or paste a custom token</p>
-        </div>
-
         <!-- Manual Token Input (when not connected) -->
         <form x-show="!$store.app.superbasedConnected" class="auth-form" @submit.prevent="$store.app.saveSuperBasedToken()">
           <label>

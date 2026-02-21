@@ -735,16 +735,17 @@ Alpine.store('app', {
     }
   },
 
-  // Hardcoded OtherStuff Superbased token for workshop (superbased-sync)
-  OTHERSTUFF_TOKEN: 'eyJraW5kIjozMDA3OCwiY3JlYXRlZF9hdCI6MTc3MDgwMDAyMiwidGFncyI6W1siZCIsInN1cGVyYmFzZWQtdG9rZW4iXSxbImFwcCIsIm5wdWIxNTh6M3FyMzh5dmR2bTd3eGR3dWc3bDlnNDc5NmpjcHVma3c0bnF1MnNlZmdqMDhrdjMzczJ3YXgzNSJdLFsic2VydmVyIiwibnB1YjE0Z2s1MHdwd3BldGE4ZmZrNmY0NnhsdDV5NHlwdXNwd3RlMjBlazR0OXltMzl1djh0dGRzNHVuNm11Il0sWyJyZWxheSIsImN2bS5vdGhlcnN0dWZmLmFpIl0sWyJhdHRlc3RhdGlvbiIsImV5SnJhVzVrSWpvek1EQTNPU3dpWTNKbFlYUmxaRjloZENJNk1UYzNNRGd3TURBd01pd2lkR0ZuY3lJNlcxc2laQ0lzSW5OMWNHVnlZbUZ6WldRdGNtVm5hWE4wY21GMGFXOXVJbDBzV3lKelpYSjJaWElpTENKdWNIVmlNVFJuYXpVd2QzQjNjR1YwWVRobVptczJaalEyZUd4ME5YazBlWEIxYzNCM2RHVXlNR1ZyTkhRNWVXMHpPWFYyT0hSMFpITTBkVzQyYlhVaVhTeGJJbTVoYldVaUxDSnpkWEJpWVhObFpDMXplVzVqSWwxZExDSmpiMjUwWlc1MElqb2lJaXdpY0hWaWEyVjVJam9pWVRGak5URXdNR1V5TnpJek1XRmpaR1k1WXpZMlltSTRPR1kzWTJFNFlXWTRZbUU1TmpBell6UmtPV1ExT1Rnek9HRTROalV5T0RrelkyWTJOalEyTXlJc0ltbGtJam9pWTJRd01tWm1ZamRtTTJNeE5qZzBPVGc1WVRZeE9UQTJZamd4TmpjM09URmtNalZrWm1Vd05HUXhObVkwTUdGbU4ySTNOVGszTVdZNVltRTNNVEE0WkNJc0luTnBaeUk2SW1VM09UZG1NbVkzWkRFeU5UZzJZelF4T1RneE5qZ3hOREppTmpnNE1XRXpaalV4WkRJd05UZ3dNelZpWXpkaU9UVXhZV1F4WkRabU5HWTBOelUxTVRoa1ptWTFZakJrWXprek9EQmxNREEzTmpFeU1HSmtaR1F5TVRsbE1qQTRNekE0TkRJellqVTNaalprWVRKak4yTTFPRGc1TmpRNU5qTXpNekk1TlRKa0luMD0iXSxbImh0dHAiLCJodHRwczovL3NiLm90aGVyc3R1ZmYuc3R1ZGlvIl1dLCJjb250ZW50IjoiIiwicHVia2V5IjoiYWEyZDQ3YjgyZTBlNTdkM2E1MzZkMjZiYTM3ZDc0MjU0ODFlNDAyZTVlNTRmY2RhYWIyOTM3MTJmMTg3NWFkYiIsImlkIjoiMGMxZWY5ZTAxYTdhOWFkYzU5OTIzMDNkMWI5ZWRkY2E3NDVmYzc4ZWY5NzhhNDdhYjZhNjJiN2U1Nzc4NmNhOCIsInNpZyI6IjBhMWQ3MDQ5YWE3NWI1NDJmNjdmZTdjYjBhNGRlY2YzMjM0MTQ3M2U2YjEwYzE0YjBlMTgzMTZhN2M1YjhkMzIwNDg0MjY1ZDlkNDg3NTBlNDNjYjRmYWRlYTMwMjViZjM5YzVkYWZkZTNmNDhhY2U4NzdlMDIzODZlNDc4YzNlIn0=',
-
   async toggleCvmSync() {
     this.useCvmSync = !this.useCvmSync;
     localStorage.setItem('use_cvm_sync', this.useCvmSync.toString());
 
     // Reconnect seamlessly with new transport (keep same token)
     if (this.superbasedConnected) {
-      const token = localStorage.getItem('superbased_token') || this.OTHERSTUFF_TOKEN;
+      const token = localStorage.getItem('superbased_token');
+      if (!token) {
+        this.superbasedError = 'No SuperBased token found. Reconnect to continue.';
+        return;
+      }
       this.stopAutoSync();
 
       try {
@@ -778,11 +779,6 @@ Alpine.store('app', {
       return window.SuperBasedSDK.createCvmSyncAdapter(token, signerOpts);
     }
     return new SuperBasedClient(token);
-  },
-
-  async connectWithOtherStuff() {
-    this.superbasedTokenInput = this.OTHERSTUFF_TOKEN;
-    await this.saveSuperBasedToken();
   },
 
   async saveSuperBasedToken() {
@@ -1003,8 +999,10 @@ Alpine.store('app', {
   },
 
   async checkSuperBasedConnection() {
-    // WORKSHOP MODE: Always use hardcoded token
-    let token = this.OTHERSTUFF_TOKEN;
+    let token = localStorage.getItem('superbased_token');
+    if (!token) {
+      token = await this.tryFetchTokenFromNostr();
+    }
 
     if (token && this.session?.npub) {
       try {
