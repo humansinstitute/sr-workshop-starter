@@ -161,59 +161,6 @@ export class SyncNotifier {
     this.subscriptions.push(sub);
   }
 
-  /**
-   * Discover delegate/pubkey relationships from kind 30078 events
-   * addressed to the current user.
-   * Returns unique hex pubkeys (event authors), excluding self.
-   */
-  async discoverDelegatePubkeys() {
-    if (!this.relayPool || !this.userPubkeyHex) {
-      return [];
-    }
-
-    const addressedToMeFilter = {
-      kinds: [DELEGATION_MANIFEST_KIND],
-      '#p': [this.userPubkeyHex],
-      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
-      limit: 500,
-    };
-    const authoredByMeFilter = {
-      kinds: [DELEGATION_MANIFEST_KIND],
-      authors: [this.userPubkeyHex],
-      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
-      limit: 500,
-    };
-
-    try {
-      const [addressedToMeEvents, authoredByMeEvents] = await Promise.race([
-        Promise.all([
-          this.relayPool.querySync(DELEGATION_RELAYS, addressedToMeFilter),
-          this.relayPool.querySync(DELEGATION_RELAYS, authoredByMeFilter),
-        ]),
-        new Promise((resolve) => setTimeout(() => resolve([[], []]), 8000)),
-      ]);
-
-      const unique = new Set();
-      for (const event of addressedToMeEvents || []) {
-        // Old-style discovery: delegate publishes and tags us
-        if (event?.pubkey && event.pubkey !== this.userPubkeyHex) {
-          unique.add(event.pubkey);
-        }
-      }
-      for (const event of authoredByMeEvents || []) {
-        // Common pattern: we publish manifest and tag delegates in `p` tags
-        for (const tag of event?.tags || []) {
-          if (tag[0] !== 'p' || !tag[1] || tag[1] === this.userPubkeyHex) continue;
-          unique.add(tag[1]);
-        }
-      }
-      return Array.from(unique);
-    } catch (err) {
-      console.warn('DelegationNotifier: discovery failed:', err.message);
-      return [];
-    }
-  }
-
   async handleEvent(event) {
     const { nip44 } = await loadNostrLibs();
     const secret = getMemorySecret();
@@ -329,6 +276,58 @@ export class DelegationNotifier {
       return decoded.data;
     }
     return pubkey;
+  }
+
+  /**
+   * Discover delegate pubkeys from delegation manifest events (kind 30078).
+   * Supports both:
+   * - Events addressed to us (`#p = our pubkey`) where author is delegate
+   * - Events authored by us where delegates are listed in `p` tags
+   */
+  async discoverDelegatePubkeys() {
+    if (!this.relayPool || !this.userPubkeyHex) {
+      return [];
+    }
+
+    const addressedToMeFilter = {
+      kinds: [DELEGATION_MANIFEST_KIND],
+      '#p': [this.userPubkeyHex],
+      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
+      limit: 500,
+    };
+    const authoredByMeFilter = {
+      kinds: [DELEGATION_MANIFEST_KIND],
+      authors: [this.userPubkeyHex],
+      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
+      limit: 500,
+    };
+
+    try {
+      const [addressedToMeEvents, authoredByMeEvents] = await Promise.race([
+        Promise.all([
+          this.relayPool.querySync(DELEGATION_RELAYS, addressedToMeFilter),
+          this.relayPool.querySync(DELEGATION_RELAYS, authoredByMeFilter),
+        ]),
+        new Promise((resolve) => setTimeout(() => resolve([[], []]), 8000)),
+      ]);
+
+      const unique = new Set();
+      for (const event of addressedToMeEvents || []) {
+        if (event?.pubkey && event.pubkey !== this.userPubkeyHex) {
+          unique.add(event.pubkey);
+        }
+      }
+      for (const event of authoredByMeEvents || []) {
+        for (const tag of event?.tags || []) {
+          if (tag[0] !== 'p' || !tag[1] || tag[1] === this.userPubkeyHex) continue;
+          unique.add(tag[1]);
+        }
+      }
+      return Array.from(unique);
+    } catch (err) {
+      console.warn('DelegationNotifier: discovery failed:', err.message);
+      return [];
+    }
   }
 
   /**
