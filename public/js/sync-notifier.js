@@ -313,14 +313,19 @@ export class DelegationNotifier {
 
       const unique = new Set();
       for (const event of addressedToMeEvents || []) {
-        if (event?.pubkey && event.pubkey !== this.userPubkeyHex) {
-          unique.add(event.pubkey);
+        if (event?.pubkey) {
+          const candidate = this._toHex(event.pubkey);
+          if (candidate && candidate !== this.userPubkeyHex) {
+            unique.add(candidate);
+          }
         }
       }
       for (const event of authoredByMeEvents || []) {
         for (const tag of event?.tags || []) {
-          if (tag[0] !== 'p' || !tag[1] || tag[1] === this.userPubkeyHex) continue;
-          unique.add(tag[1]);
+          if (tag[0] !== 'p' || !tag[1]) continue;
+          const candidate = this._toHex(tag[1]);
+          if (!candidate || candidate === this.userPubkeyHex) continue;
+          unique.add(candidate);
         }
       }
       return Array.from(unique);
