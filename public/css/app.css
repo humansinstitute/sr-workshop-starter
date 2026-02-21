@@ -760,6 +760,35 @@ li {
   gap: 0.75rem;
   margin-top: 1rem;
 }
+.superbased-qr-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+.superbased-qr-actions .auth-option {
+  flex: 1;
+}
+.superbased-qr-scanner {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 0.6rem;
+  margin-bottom: 0.75rem;
+  background: #f8f8f8;
+}
+.superbased-qr-video {
+  width: 100%;
+  border-radius: 8px;
+  background: #111;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+}
+.superbased-qr-hint {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  color: #666;
+  text-align: left;
+}
 .superbased-actions .auth-option {
   flex: 1;
 }

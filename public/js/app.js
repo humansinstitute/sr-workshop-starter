@@ -95,6 +95,8 @@ Alpine.store('app', {
   showSuperBasedModal: false,
   superbasedTokenInput: '',
   superbasedError: null,
+  superbasedScanError: null,
+  isScanningSuperBasedQr: false,
   superbasedConnected: false,
   isSavingSuperBased: false,
   isSyncing: false,
@@ -109,6 +111,9 @@ Alpine.store('app', {
   syncNotifier: null,
   delegationNotifier: null,
   syncPollInterval: null,
+  superbasedQrStream: null,
+  superbasedQrRaf: null,
+  superbasedQrHandlingScan: false,
   // Sync status tracking
   hasUnsyncedChanges: false,
   lastLocalChangeTime: null,
@@ -690,7 +695,13 @@ Alpine.store('app', {
       this.superbasedTokenInput = existingToken;
     }
     this.superbasedError = null;
+    this.superbasedScanError = null;
     this.showSuperBasedModal = true;
+  },
+
+  closeSuperBasedSettings() {
+    this.stopSuperBasedQrScan();
+    this.showSuperBasedModal = false;
   },
 
   // Agent Connect - show connection config for AI agents
@@ -794,6 +805,9 @@ Alpine.store('app', {
   },
 
   async saveSuperBasedToken() {
+    if (this.isScanningSuperBasedQr) {
+      this.stopSuperBasedQrScan();
+    }
     const token = this.superbasedTokenInput.trim();
     if (!token) {
       this.superbasedError = 'Please paste a token';
@@ -846,6 +860,119 @@ Alpine.store('app', {
     } finally {
       this.isSavingSuperBased = false;
     }
+  },
+
+  extractSuperBasedTokenFromQr(qrPayload) {
+    const raw = (qrPayload || '').trim();
+    if (!raw) return '';
+
+    if (raw.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed?.token === 'string') return parsed.token.trim();
+      } catch (_err) {
+        // Fall back to raw
+      }
+    }
+
+    try {
+      const url = new URL(raw);
+      const qpToken = url.searchParams.get('token');
+      if (qpToken) return qpToken.trim();
+      const hashParams = new URLSearchParams(url.hash.replace(/^#/, ''));
+      const hashToken = hashParams.get('token');
+      if (hashToken) return hashToken.trim();
+    } catch (_err) {
+      // Not a URL, use raw
+    }
+
+    return raw;
+  },
+
+  async startSuperBasedQrScan() {
+    if (this.isScanningSuperBasedQr) return;
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      this.superbasedScanError = 'Camera scanning requires HTTPS and browser camera support.';
+      return;
+    }
+    if (!window.BarcodeDetector) {
+      this.superbasedScanError = 'QR scanning is not supported in this browser. Paste token manually.';
+      return;
+    }
+
+    this.superbasedScanError = null;
+    this.superbasedError = null;
+    this.superbasedQrHandlingScan = false;
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false,
+      });
+
+      this.superbasedQrStream = stream;
+      this.isScanningSuperBasedQr = true;
+
+      const video = document.querySelector('[data-superbased-qr-video]');
+      if (!video) throw new Error('Scanner video element not found');
+
+      video.srcObject = stream;
+      video.setAttribute('playsinline', 'true');
+      await video.play();
+
+      const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+
+      const scanFrame = async () => {
+        if (!this.isScanningSuperBasedQr || this.superbasedQrHandlingScan) return;
+
+        try {
+          const codes = await detector.detect(video);
+          if (codes?.length) {
+            this.superbasedQrHandlingScan = true;
+            const token = this.extractSuperBasedTokenFromQr(codes[0].rawValue || '');
+            if (!token) {
+              this.superbasedScanError = 'QR code does not contain a valid token.';
+              this.superbasedQrHandlingScan = false;
+            } else {
+              this.superbasedTokenInput = token;
+              this.stopSuperBasedQrScan();
+              await this.saveSuperBasedToken();
+              return;
+            }
+          }
+        } catch (err) {
+          // Ignore frame-level detection errors and keep scanning.
+          if (!this.isScanningSuperBasedQr) return;
+          console.warn('SuperBased QR frame scan failed:', err);
+        }
+
+        this.superbasedQrRaf = requestAnimationFrame(scanFrame);
+      };
+
+      this.superbasedQrRaf = requestAnimationFrame(scanFrame);
+    } catch (err) {
+      console.error('Failed to start SuperBased QR scanner:', err);
+      this.superbasedScanError = err.message || 'Unable to access camera.';
+      this.stopSuperBasedQrScan();
+    }
+  },
+
+  stopSuperBasedQrScan() {
+    this.isScanningSuperBasedQr = false;
+    this.superbasedQrHandlingScan = false;
+
+    if (this.superbasedQrRaf) {
+      cancelAnimationFrame(this.superbasedQrRaf);
+      this.superbasedQrRaf = null;
+    }
+
+    if (this.superbasedQrStream) {
+      this.superbasedQrStream.getTracks().forEach(track => track.stop());
+      this.superbasedQrStream = null;
+    }
+
+    const video = document.querySelector('[data-superbased-qr-video]');
+    if (video) video.srcObject = null;
   },
 
   async initSuperBasedClient(token) {

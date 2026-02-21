@@ -516,11 +516,11 @@
     <div
       class="modal-overlay"
       x-show="$store.app.showSuperBasedModal"
-      @click.self="$store.app.showSuperBasedModal = false"
-      @keydown.escape.window="$store.app.showSuperBasedModal = false"
+      @click.self="$store.app.closeSuperBasedSettings()"
+      @keydown.escape.window="$store.app.closeSuperBasedSettings()"
     >
       <div class="modal superbased-modal">
-        <button class="modal-close" type="button" @click="$store.app.showSuperBasedModal = false">&times;</button>
+        <button class="modal-close" type="button" @click="$store.app.closeSuperBasedSettings()">&times;</button>
         <h2>SuperBased Sync</h2>
         <p>Connect to SuperBased to sync your todos across devices.</p>
 
@@ -585,6 +585,26 @@
               class="token-input"
             ></textarea>
           </label>
+          <div class="superbased-qr-actions">
+            <button
+              class="auth-option secondary"
+              type="button"
+              x-show="!$store.app.isScanningSuperBasedQr"
+              @click="$store.app.startSuperBasedQrScan()"
+              :disabled="$store.app.isSavingSuperBased"
+            >Scan QR</button>
+            <button
+              class="auth-option secondary danger"
+              type="button"
+              x-show="$store.app.isScanningSuperBasedQr"
+              @click="$store.app.stopSuperBasedQrScan()"
+            >Stop Scan</button>
+          </div>
+          <div class="superbased-qr-scanner" x-show="$store.app.isScanningSuperBasedQr">
+            <video data-superbased-qr-video class="superbased-qr-video" muted autoplay playsinline></video>
+            <p class="superbased-qr-hint">Point your camera at a SuperBased connection QR code. Connect starts automatically after scan.</p>
+          </div>
+          <p class="auth-error" x-show="$store.app.superbasedScanError" x-text="$store.app.superbasedScanError"></p>
           <p class="auth-error" x-show="$store.app.superbasedError" x-text="$store.app.superbasedError"></p>
           <div class="superbased-actions">
             <button
