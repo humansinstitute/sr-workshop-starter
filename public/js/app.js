@@ -55,8 +55,8 @@ import {
 } from './superbased-nostr.js';
 
 // Configure this per deployment - the expected app identity for token lookup
-// Set both to enable direct lookup, or leave null to fetch all and use if exactly 1
-const EXPECTED_APP_NPUB = null; // e.g., 'npub1abc...'
+// Set both to enable direct lookup, or set only EXPECTED_APP_NPUB to prefer matching app tokens
+const EXPECTED_APP_NPUB = 'npub1l6j6wardt9rpt9lrjejph35j5fjv92hk8qqp07n2fkz56agu5q0q8y67k3';
 const EXPECTED_BACKEND_URL = null; // e.g., 'https://superbasedtodo.ritoh.com'
 
 // Make Alpine available globally for debugging
@@ -1041,13 +1041,30 @@ Alpine.store('app', {
         return null;
       }
 
-      // No specific app configured - fetch all tokens and check count
+      // No direct app+URL identity configured - fetch all tokens
       console.log('SuperBased: Checking Nostr for any stored tokens');
       const tokens = await fetchAllSuperBasedTokens();
 
       if (tokens.length === 0) {
         console.log('SuperBased: No tokens found on Nostr');
         return null;
+      }
+
+      // If app is configured, prefer tokens for that app npub
+      if (EXPECTED_APP_NPUB) {
+        const appTokens = tokens.filter(t => t.appNpub === EXPECTED_APP_NPUB);
+        if (appTokens.length === 1) {
+          console.log('SuperBased: Found 1 token on Nostr for configured app npub, using it');
+          localStorage.setItem('superbased_token', appTokens[0].token);
+          return appTokens[0].token;
+        }
+        if (appTokens.length > 1) {
+          // Choose most recent by payload timestamp when present
+          appTokens.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+          console.log('SuperBased: Found multiple tokens for configured app npub, using latest');
+          localStorage.setItem('superbased_token', appTokens[0].token);
+          return appTokens[0].token;
+        }
       }
 
       if (tokens.length === 1) {
