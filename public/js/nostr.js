@@ -618,6 +618,7 @@ export async function encryptObjectToRecipient(obj, recipientPubkeyHex) {
 
 const PROFILE_KIND = 0;
 const PROFILE_FETCH_TIMEOUT = 5000;
+const PROFILE_FETCH_TIMEOUT_PER_RELAY = 2500;
 
 /**
  * Fetch user profile (kind 0) from relays
@@ -638,13 +639,32 @@ export async function fetchProfile(pubkeyHex) {
       limit: 1,
     };
 
-    // Query relays with timeout
-    const events = await Promise.race([
-      relayPool.querySync(DEFAULT_RELAYS, filter),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Timeout')), PROFILE_FETCH_TIMEOUT)
-      ),
-    ]);
+    // First try a batched query. If it times out, fall back to per-relay fanout
+    // so one slow relay does not block all profile resolution.
+    let events = [];
+    try {
+      events = await Promise.race([
+        relayPool.querySync(DEFAULT_RELAYS, filter),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout')), PROFILE_FETCH_TIMEOUT)
+        ),
+      ]);
+    } catch {
+      const relayResults = await Promise.allSettled(
+        DEFAULT_RELAYS.map((relay) =>
+          Promise.race([
+            relayPool.querySync([relay], filter),
+            new Promise((resolve) =>
+              setTimeout(() => resolve([]), PROFILE_FETCH_TIMEOUT_PER_RELAY)
+            ),
+          ])
+        )
+      );
+
+      events = relayResults
+        .filter((r) => r.status === 'fulfilled')
+        .flatMap((r) => r.value || []);
+    }
 
     if (events && events.length > 0) {
       // Get most recent profile event
