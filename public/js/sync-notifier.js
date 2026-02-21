@@ -498,7 +498,6 @@ export class DelegationNotifier {
     const filter = {
       kinds: [DELEGATION_MANIFEST_KIND],
       '#p': [this.userPubkeyHex],
-      '#t': ['der-delegation'],
       since: Math.floor(Date.now() / 1000) - 300,
     };
 
