@@ -774,11 +774,21 @@ Alpine.store('app', {
   },
 
   async createSyncClient(token) {
+    let client;
     if (this.useCvmSync && window.SuperBasedSDK?.createCvmSyncAdapter) {
       const signerOpts = this.getCvmSignerOptions();
-      return window.SuperBasedSDK.createCvmSyncAdapter(token, signerOpts);
+      client = window.SuperBasedSDK.createCvmSyncAdapter(token, signerOpts);
+    } else {
+      client = new SuperBasedClient(token);
     }
-    return new SuperBasedClient(token);
+
+    // Connection tokens may omit app_npub (metadata-only format).
+    // Keep a stable app identity in client config for UI and notifier namespacing.
+    if (!client?.config?.appNpub && EXPECTED_APP_NPUB) {
+      client.config.appNpub = EXPECTED_APP_NPUB;
+    }
+
+    return client;
   },
 
   async saveSuperBasedToken() {
