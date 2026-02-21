@@ -290,12 +290,6 @@ export class DelegationNotifier {
       return [];
     }
 
-    const addressedToMeFilter = {
-      kinds: [DELEGATION_MANIFEST_KIND],
-      '#p': [this.userPubkeyHex],
-      since: Math.floor(Date.now() / 1000) - (60 * 60 * 24 * 365),
-      limit: 500,
-    };
     const authoredByMeFilter = {
       kinds: [DELEGATION_MANIFEST_KIND],
       authors: [this.userPubkeyHex],
@@ -306,35 +300,21 @@ export class DelegationNotifier {
     try {
       const cachedEvents = await getCachedNostrEvents(
         DELEGATION_MANIFEST_KIND,
-        (event) => {
-          if (!event) return false;
-          if (event.pubkey === this.userPubkeyHex) return true;
-          return (event.tags || []).some((tag) => tag[0] === 'p' && this._toHex(tag[1]) === this.userPubkeyHex);
-        }
+        (event) => event?.pubkey === this.userPubkeyHex
       );
 
-      const [addressedToMeEvents, authoredByMeEvents] = await Promise.race([
-        Promise.all([
-          this.relayPool.querySync(DELEGATION_RELAYS, addressedToMeFilter),
-          this.relayPool.querySync(DELEGATION_RELAYS, authoredByMeFilter),
-        ]),
-        new Promise((resolve) => setTimeout(() => resolve([[], []]), 8000)),
+      const authoredByMeEvents = await Promise.race([
+        this.relayPool.querySync(DELEGATION_RELAYS, authoredByMeFilter),
+        new Promise((resolve) => setTimeout(() => resolve([]), 8000)),
       ]);
-      const freshEvents = [...(addressedToMeEvents || []), ...(authoredByMeEvents || [])];
+      const freshEvents = authoredByMeEvents || [];
       await cacheNostrEvents(freshEvents);
 
       const unique = new Set();
       const allEvents = [...cachedEvents, ...freshEvents];
       for (const event of allEvents) {
-        if (event?.pubkey) {
-          const candidate = this._toHex(event.pubkey);
-          const targetsMe = (event.tags || []).some((tag) => tag[0] === 'p' && this._toHex(tag[1]) === this.userPubkeyHex);
-          if (targetsMe && candidate && candidate !== this.userPubkeyHex) {
-            unique.add(candidate);
-          }
-        }
+        if (event?.pubkey !== this.userPubkeyHex) continue;
         for (const tag of event?.tags || []) {
-          if (event.pubkey !== this.userPubkeyHex) continue;
           if (tag[0] !== 'p' || !tag[1]) continue;
           const candidate = this._toHex(tag[1]);
           if (!candidate || candidate === this.userPubkeyHex) continue;
