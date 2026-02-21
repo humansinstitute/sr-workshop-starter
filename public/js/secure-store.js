@@ -21,6 +21,14 @@ db.version(3).stores({
   superbasedTokens: 'id', // Encrypted SuperBased tokens
 });
 
+db.version(4).stores({
+  credentials: 'id',
+  deviceKey: 'id',
+  profiles: 'pubkey',
+  superbasedTokens: 'id',
+  nostrEvents: '[kind+id], kind, pubkey, created_at, seenAt',
+});
+
 const DEVICE_KEY_ID = 'device-key';
 const CRED_ID = 'primary';
 const AUTH_EXPIRY_DAYS = 7;
@@ -266,6 +274,7 @@ export async function clearCachedProfile(pubkey) {
 // ===========================================
 
 const SUPERBASED_TOKEN_ID = 'primary';
+const NOSTR_EVENT_CACHE_HOURS = 24;
 
 /**
  * Store SuperBased token securely
@@ -309,4 +318,47 @@ export async function clearSuperbasedToken() {
 export async function hasSuperbasedToken() {
   const record = await db.superbasedTokens.get(SUPERBASED_TOKEN_ID);
   return !!record?.encryptedToken;
+}
+
+// ===========================================
+// Nostr Event Cache
+// ===========================================
+
+export async function cacheNostrEvents(events = []) {
+  if (!Array.isArray(events) || events.length === 0) return;
+
+  const seenAt = Date.now();
+  const rows = events
+    .filter((event) => event?.id && typeof event.kind === 'number')
+    .map((event) => ({
+      kind: event.kind,
+      id: event.id,
+      pubkey: event.pubkey || null,
+      created_at: event.created_at || 0,
+      seenAt,
+      event,
+    }));
+
+  if (rows.length > 0) {
+    await db.table('nostrEvents').bulkPut(rows);
+  }
+}
+
+export async function getCachedNostrEvents(kind, filterFn = null, maxAgeHours = NOSTR_EVENT_CACHE_HOURS) {
+  const table = db.table('nostrEvents');
+  const maxAgeMs = maxAgeHours * 60 * 60 * 1000;
+  const cutoff = Date.now() - maxAgeMs;
+
+  const rows = await table.where('kind').equals(kind).toArray();
+  const validRows = rows.filter((row) => (row.seenAt || 0) >= cutoff);
+
+  const expiredKeys = rows
+    .filter((row) => (row.seenAt || 0) < cutoff)
+    .map((row) => [row.kind, row.id]);
+  if (expiredKeys.length > 0) {
+    await table.bulkDelete(expiredKeys);
+  }
+
+  const events = validRows.map((row) => row.event).filter(Boolean);
+  return filterFn ? events.filter(filterFn) : events;
 }

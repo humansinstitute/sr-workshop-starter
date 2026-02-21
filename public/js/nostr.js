@@ -6,6 +6,8 @@ import {
   refreshCredentialExpiry,
   cacheProfile,
   getCachedProfile,
+  cacheNostrEvents,
+  getCachedNostrEvents,
 } from './secure-store.js';
 import { getOrCreateInstanceKey } from './keyteleport.js';
 
@@ -629,6 +631,24 @@ export async function fetchProfile(pubkeyHex) {
   const cached = await getCachedProfile(pubkeyHex);
   if (cached) return cached;
 
+  // Then check cached kind 0 events
+  const cachedEvents = await getCachedNostrEvents(
+    PROFILE_KIND,
+    (event) => event?.pubkey === pubkeyHex,
+  );
+  if (cachedEvents.length > 0) {
+    const latestCached = cachedEvents.reduce((a, b) =>
+      (a.created_at > b.created_at) ? a : b
+    );
+    try {
+      const profile = JSON.parse(latestCached.content);
+      await cacheProfile(pubkeyHex, profile);
+      return profile;
+    } catch {
+      // ignore bad cached payload
+    }
+  }
+
   const { pool } = await loadNostrLibs();
   const relayPool = new pool.SimplePool();
 
@@ -667,6 +687,7 @@ export async function fetchProfile(pubkeyHex) {
     }
 
     if (events && events.length > 0) {
+      await cacheNostrEvents(events);
       // Get most recent profile event
       const latest = events.reduce((a, b) =>
         (a.created_at > b.created_at) ? a : b

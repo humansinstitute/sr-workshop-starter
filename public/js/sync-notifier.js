@@ -2,6 +2,7 @@
 // Publishes events when local changes happen, subscribes to remote changes
 
 import { loadNostrLibs, getMemorySecret, getMemoryPubkey } from './nostr.js';
+import { cacheNostrEvents, getCachedNostrEvents } from './secure-store.js';
 
 const SYNC_NOTIFY_KIND = 30080;
 // Use just one fast relay for notifications
@@ -303,6 +304,15 @@ export class DelegationNotifier {
     };
 
     try {
+      const cachedEvents = await getCachedNostrEvents(
+        DELEGATION_MANIFEST_KIND,
+        (event) => {
+          if (!event) return false;
+          if (event.pubkey === this.userPubkeyHex) return true;
+          return (event.tags || []).some((tag) => tag[0] === 'p' && this._toHex(tag[1]) === this.userPubkeyHex);
+        }
+      );
+
       const [addressedToMeEvents, authoredByMeEvents] = await Promise.race([
         Promise.all([
           this.relayPool.querySync(DELEGATION_RELAYS, addressedToMeFilter),
@@ -310,18 +320,21 @@ export class DelegationNotifier {
         ]),
         new Promise((resolve) => setTimeout(() => resolve([[], []]), 8000)),
       ]);
+      const freshEvents = [...(addressedToMeEvents || []), ...(authoredByMeEvents || [])];
+      await cacheNostrEvents(freshEvents);
 
       const unique = new Set();
-      for (const event of addressedToMeEvents || []) {
+      const allEvents = [...cachedEvents, ...freshEvents];
+      for (const event of allEvents) {
         if (event?.pubkey) {
           const candidate = this._toHex(event.pubkey);
-          if (candidate && candidate !== this.userPubkeyHex) {
+          const targetsMe = (event.tags || []).some((tag) => tag[0] === 'p' && this._toHex(tag[1]) === this.userPubkeyHex);
+          if (targetsMe && candidate && candidate !== this.userPubkeyHex) {
             unique.add(candidate);
           }
         }
-      }
-      for (const event of authoredByMeEvents || []) {
         for (const tag of event?.tags || []) {
+          if (event.pubkey !== this.userPubkeyHex) continue;
           if (tag[0] !== 'p' || !tag[1]) continue;
           const candidate = this._toHex(tag[1]);
           if (!candidate || candidate === this.userPubkeyHex) continue;
