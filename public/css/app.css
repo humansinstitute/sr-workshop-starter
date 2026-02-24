@@ -1023,8 +1023,12 @@ li {
 .delegate-suggestion-item {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
+}
+
+.delegate-suggestion-item .auth-option {
+  flex-shrink: 0;
 }
 
 .delegation-form input[type="text"] {
@@ -1080,12 +1084,19 @@ li {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  min-width: 0;
+  flex: 1;
 }
 
 .delegation-npub {
   font-family: monospace;
   font-size: 0.85rem;
   color: var(--text);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.25;
+  min-width: 0;
 }
 
 .delegation-perms {
