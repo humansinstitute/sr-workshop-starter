@@ -234,6 +234,7 @@ const DELEGATION_RELAYS = [
   'wss://nostr.mineracks.com',
   'wss://relay.primal.net',
 ];
+const DELEGATE_DISCOVERY_TTL_MS = 5 * 60 * 1000;
 
 export class DelegationNotifier {
   constructor(appNpub) {
@@ -243,6 +244,52 @@ export class DelegationNotifier {
     this.subscriptions = [];
     this.onDelegation = null;
     this.superbasedPubkeyHex = null; // Set from token config
+  }
+
+  _delegateCacheKey() {
+    if (!this.userPubkeyHex) return null;
+    const appPart = this.appNpub || 'default';
+    return `delegate_discovery_cache:${this.userPubkeyHex}:${appPart}`;
+  }
+
+  _readDelegateCache() {
+    const key = this._delegateCacheKey();
+    if (!key) return null;
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed?.pubkeys)) return null;
+      const pubkeys = parsed.pubkeys.filter((pk) => typeof pk === 'string' && pk.length > 0);
+      const lastCheckedAt = Number(parsed.lastCheckedAt || 0);
+      return { pubkeys, lastCheckedAt };
+    } catch {
+      return null;
+    }
+  }
+
+  _writeDelegateCache(pubkeys, lastCheckedAt = Date.now()) {
+    const key = this._delegateCacheKey();
+    if (!key) return;
+    try {
+      localStorage.setItem(key, JSON.stringify({ pubkeys, lastCheckedAt }));
+    } catch {
+      // ignore storage write failures
+    }
+  }
+
+  _extractDelegatesFromEvents(events = []) {
+    const unique = new Set();
+    for (const event of events) {
+      if (event?.pubkey !== this.userPubkeyHex) continue;
+      for (const tag of event?.tags || []) {
+        if (tag[0] !== 'p' || !tag[1]) continue;
+        const candidate = this._toHex(tag[1]);
+        if (!candidate || candidate === this.userPubkeyHex) continue;
+        unique.add(candidate);
+      }
+    }
+    return Array.from(unique);
   }
 
   async init() {
@@ -286,9 +333,15 @@ export class DelegationNotifier {
    * - Events addressed to us (`#p = our pubkey`) where author is delegate
    * - Events authored by us where delegates are listed in `p` tags
    */
-  async discoverDelegatePubkeys() {
+  async discoverDelegatePubkeys({ forceRefresh = false } = {}) {
     if (!this.relayPool || !this.userPubkeyHex) {
       return [];
+    }
+
+    const now = Date.now();
+    const cache = this._readDelegateCache();
+    if (!forceRefresh && cache?.lastCheckedAt && (now - cache.lastCheckedAt) < DELEGATE_DISCOVERY_TTL_MS) {
+      return cache.pubkeys;
     }
 
     const authoredByMeFilter = {
@@ -311,20 +364,15 @@ export class DelegationNotifier {
       const freshEvents = authoredByMeEvents || [];
       await cacheNostrEvents(freshEvents);
 
-      const unique = new Set();
       const allEvents = [...cachedEvents, ...freshEvents];
-      for (const event of allEvents) {
-        if (event?.pubkey !== this.userPubkeyHex) continue;
-        for (const tag of event?.tags || []) {
-          if (tag[0] !== 'p' || !tag[1]) continue;
-          const candidate = this._toHex(tag[1]);
-          if (!candidate || candidate === this.userPubkeyHex) continue;
-          unique.add(candidate);
-        }
-      }
-      return Array.from(unique);
+      const pubkeys = this._extractDelegatesFromEvents(allEvents);
+      this._writeDelegateCache(pubkeys, Date.now());
+      return pubkeys;
     } catch (err) {
       console.warn('DelegationNotifier: discovery failed:', err.message);
+      if (cache?.pubkeys) {
+        return cache.pubkeys;
+      }
       return [];
     }
   }

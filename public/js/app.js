@@ -111,6 +111,7 @@ Alpine.store('app', {
   superbasedClient: null,
   syncNotifier: null,
   delegationNotifier: null,
+  delegateDiscoveryInterval: null,
   syncPollInterval: null,
   superbasedQrStream: null,
   superbasedQrRaf: null,
@@ -333,6 +334,10 @@ Alpine.store('app', {
     if (this.delegationNotifier) {
       this.delegationNotifier.destroy();
       this.delegationNotifier = null;
+    }
+    if (this.delegateDiscoveryInterval) {
+      clearInterval(this.delegateDiscoveryInterval);
+      this.delegateDiscoveryInterval = null;
     }
 
     // Clear all local data
@@ -1027,9 +1032,34 @@ Alpine.store('app', {
       this.delegationNotifier = new DelegationNotifier(appNpub);
       await this.delegationNotifier.init();
       console.log('SuperBased: DelegationNotifier ready');
+      this.startDelegateDiscoveryBackgroundRefresh();
+      this.refreshDelegateDiscoveryInBackground();
     } catch (err) {
       console.error('SuperBased: DelegationNotifier failed (non-fatal):', err);
       this.delegationNotifier = null;
+    }
+  },
+
+  startDelegateDiscoveryBackgroundRefresh() {
+    if (this.delegateDiscoveryInterval) return;
+    this.delegateDiscoveryInterval = setInterval(() => {
+      this.refreshDelegateDiscoveryInBackground();
+    }, 5 * 60 * 1000);
+  },
+
+  stopDelegateDiscoveryBackgroundRefresh() {
+    if (!this.delegateDiscoveryInterval) return;
+    clearInterval(this.delegateDiscoveryInterval);
+    this.delegateDiscoveryInterval = null;
+  },
+
+  async refreshDelegateDiscoveryInBackground() {
+    if (!this.delegationNotifier?.discoverDelegatePubkeys) return;
+    try {
+      const pubkeys = await this.delegationNotifier.discoverDelegatePubkeys();
+      this.applyDiscoveredDelegates(pubkeys);
+    } catch (err) {
+      console.warn('Background delegate discovery failed:', err);
     }
   },
 
@@ -1073,6 +1103,7 @@ Alpine.store('app', {
       this.delegationNotifier.destroy();
       this.delegationNotifier = null;
     }
+    this.stopDelegateDiscoveryBackgroundRefresh();
 
     // Optionally delete from Nostr
     if (deleteFromNostr && this.superbasedClient) {
@@ -1276,10 +1307,17 @@ Alpine.store('app', {
     this.newDelegateNpub = '';
     this.delegatePermRead = true;
     this.delegatePermWrite = false;
-    this.discoveredDelegatePubkeys = [];
     this.showDelegationsModal = true;
     this.loadDelegations();
     this.discoverDelegatesFromNostr();
+  },
+
+  applyDiscoveredDelegates(pubkeys) {
+    const alreadyDelegated = new Set((this.delegations || []).map(d => d.delegate_pubkey));
+    this.discoveredDelegatePubkeys = (pubkeys || []).filter(pk => !alreadyDelegated.has(pk));
+    for (const hex of this.discoveredDelegatePubkeys) {
+      this.resolveDelegateProfile(hex);
+    }
   },
 
   async discoverDelegatesFromNostr() {
@@ -1288,11 +1326,7 @@ Alpine.store('app', {
     this.isDiscoveringDelegates = true;
     try {
       const pubkeys = await this.delegationNotifier.discoverDelegatePubkeys();
-      const alreadyDelegated = new Set((this.delegations || []).map(d => d.delegate_pubkey));
-      this.discoveredDelegatePubkeys = pubkeys.filter(pk => !alreadyDelegated.has(pk));
-      for (const hex of this.discoveredDelegatePubkeys) {
-        this.resolveDelegateProfile(hex);
-      }
+      this.applyDiscoveredDelegates(pubkeys);
     } catch (err) {
       console.error('Failed to discover delegates from Nostr:', err);
     } finally {
@@ -1322,6 +1356,7 @@ Alpine.store('app', {
           this.resolveDelegateProfile(d.delegate_pubkey);
         }
       }
+      this.applyDiscoveredDelegates(this.discoveredDelegatePubkeys);
     } catch (err) {
       console.error('Failed to load delegations:', err);
       this.delegationError = err.message;
@@ -1358,6 +1393,7 @@ Alpine.store('app', {
       this.delegatePermRead = true;
       this.delegatePermWrite = false;
       await this.loadDelegations();
+      this.refreshDelegateDiscoveryInBackground();
 
       // Batch re-encrypt all records with updated delegate list
       await this.reEncryptForDelegates();
@@ -1377,6 +1413,7 @@ Alpine.store('app', {
       await this.superbasedClient.revokeDelegation(delegateNpub);
 
       await this.loadDelegations();
+      this.refreshDelegateDiscoveryInBackground();
 
       // Batch re-encrypt all records without the revoked delegate
       await this.reEncryptForDelegates();
