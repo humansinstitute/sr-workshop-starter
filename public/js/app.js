@@ -715,7 +715,7 @@ Alpine.store('app', {
     this.showAvatarMenu = false;
     this.agentConfigCopied = false;
 
-    // Decode appNpub to hex pubkey so agents don't need to convert
+    // Include app metadata for reference, but record routing is app-less (/records/*)
     const appNpub = this.superbasedClient?.config?.appNpub || EXPECTED_APP_NPUB || '';
     let appPubkey = '';
     if (appNpub) {
@@ -732,6 +732,7 @@ Alpine.store('app', {
     const config = {
       agentConnectGuide: `${window.location.origin}/agentconnect.md`,
       superbasedURL: this.superbasedClient?.config?.httpUrl || '',
+      namespaceMode: 'default',
       appNpub,
       appPubkey,
       ownerPubkey: this.session?.pubkey || '',

@@ -1,4 +1,4 @@
-# Agent API Documentation
+# Agent API Documentation (App-less SuperBased)
 
 API for AI agents with delegated access to read and update todos via SuperBased.
 
@@ -14,6 +14,7 @@ The app provides an **Agent Connect JSON** when the user clicks "Agent Connect".
 {
   "agentConnectGuide": "https://example.com/agentconnect.md",
   "superbasedURL": "https://sb.otherstuff.studio",
+  "namespaceMode": "default",
   "appNpub": "npub1abc...",
   "appPubkey": "a1c51007...",
   "ownerPubkey": "934b9c5b5d2cbca3c21b9d18da7cac94b61bf0cf57756531d08f6818227c77ce",
@@ -21,17 +22,20 @@ The app provides an **Agent Connect JSON** when the user clicks "Agent Connect".
 }
 ```
 
-### Field mapping to MCP tools
+### Field mapping to tools
 
 | Agent Connect field | MCP tool parameter | Format | Usage |
 |--------------------|--------------------|--------|-------|
-| `appNpub` | `app_npub` | npub (bech32) | Pass directly - already in the correct format |
-| `appPubkey` | — | 64-char hex | Hex version of appNpub, for APIs that need hex format |
+| `namespaceMode` | `namespace_mode` | string | **Must be `"default"`** for this app (use app-less `/records/*` routes) |
+| `appNpub` | — | npub (bech32) | Optional metadata only (do not use for routing in this app) |
+| `appPubkey` | — | 64-char hex | Optional metadata only |
 | `superbasedURL` | `base_url` | URL string | Pass directly to all SuperBased MCP calls |
 | `ownerPubkey` | `owner_pubkey` | 64-char hex | **Required** for both fetch and sync — scopes records to this owner |
 | `ownerNpub` | metadata `owner` | npub (bech32) | Include in record metadata |
 
 **All values are ready to use as-is.** No format conversion needed.
+
+**Important**: This starter app uses **app-less SuperBased routes**. Do not call legacy app-scoped routes like `/records/:appNpub/fetch` or `/records/:appNpub/sync` for this workflow.
 
 ---
 
@@ -52,6 +56,8 @@ All API requests use **NIP-98 HTTP Auth** (Nostr-signed request headers). There 
 
 Wingman handles NIP-98 signing automatically. Use the `sign_nip98` MCP tool when making raw HTTP requests, or use the higher-level `superbased_fetch_records` and `superbased_sync_records` tools which handle auth internally.
 
+When using MCP/CLI tools for this app, set `namespace_mode: "default"` and do not pass `app_npub`.
+
 ---
 
 ## Reading Delegated Tasks
@@ -65,7 +71,7 @@ Use the `superbased_fetch_records` MCP tool. It automatically:
 
 ```
 superbased_fetch_records(
-  app_npub: "<appNpub from Agent Connect JSON>",
+  namespace_mode: "default",
   owner_pubkey: "<ownerPubkey from Agent Connect JSON>",
   base_url: "<superbasedURL from Agent Connect JSON>",
   collection: "todos"
@@ -141,7 +147,7 @@ The correct workflow is:
 
 ```
 superbased_sync_records(
-  app_npub: "<appNpub from Agent Connect JSON>",
+  namespace_mode: "default",
   base_url: "<superbasedURL from Agent Connect JSON>",
   records: [
     {
@@ -168,7 +174,7 @@ superbased_sync_records(
 
 ```
 superbased_sync_records(
-  app_npub: "<appNpub from Agent Connect JSON>",
+  namespace_mode: "default",
   base_url: "<superbasedURL from Agent Connect JSON>",
   records: [
     {
@@ -213,23 +219,23 @@ If you need to make direct HTTP calls instead of using the SuperBased MCP tools,
 ```
 # 1. Get a NIP-98 token
 sign_nip98(
-  url: "https://sb.otherstuff.studio/records/npub1abc.../fetch?delegate=true&collection=todos",
+  url: "https://sb.otherstuff.studio/records/delegated?owner=<ownerPubkey-hex>&collection=todos",
   method: "GET"
 )
 
 # 2. Use the returned Authorization header in your request
 curl -H "Authorization: Nostr <base64-signed-event>" \
-  "https://sb.otherstuff.studio/records/npub1abc.../fetch?delegate=true&collection=todos"
+  "https://sb.otherstuff.studio/records/delegated?owner=<ownerPubkey-hex>&collection=todos"
 ```
 
-The `?delegate=true` parameter tells SuperBased to return records where the authenticated pubkey is listed as a delegate.
+Use the app-less delegated endpoint (`/records/delegated`) and pass the owner filter as `owner=<ownerPubkey-hex>`.
 
 ### Sync records
 
 ```
 # 1. Get a NIP-98 token (POST requires body hash)
 sign_nip98(
-  url: "https://sb.otherstuff.studio/records/npub1abc.../sync",
+  url: "https://sb.otherstuff.studio/records/sync",
   method: "POST",
   body_hash: "<sha256-hex-of-request-body>"
 )
@@ -239,7 +245,7 @@ curl -X POST \
   -H "Authorization: Nostr <base64-signed-event>" \
   -H "Content-Type: application/json" \
   -d '{ "records": [...] }' \
-  "https://sb.otherstuff.studio/records/npub1abc.../sync"
+  "https://sb.otherstuff.studio/records/sync"
 ```
 
 **Note**: When using raw API calls, you must handle NIP-44 encryption/decryption yourself. The `encrypted_data` field is NIP-44 ciphertext (not plain JSON). Delegate copies are in the `delegate_payloads` map keyed by delegate hex pubkey.
@@ -400,7 +406,7 @@ record_id:   todo_4010bc5a34508299
 
 ```
 superbased_fetch_records(
-  app_npub: "<appNpub>",
+  namespace_mode: "default",
   owner_pubkey: "<ownerPubkey>",
   base_url: "<superbasedURL>",
   collection: "todos"
@@ -413,7 +419,7 @@ superbased_fetch_records(
 
 ```
 superbased_sync_records(
-  app_npub: "<appNpub>",
+  namespace_mode: "default",
   base_url: "<superbasedURL>",
   records: [
     {
@@ -551,7 +557,7 @@ The encrypted payload must include a `_collection` discriminator field:
 
 ```
 superbased_sync_records(
-  app_npub: "<appNpub from Agent Connect JSON>",
+  namespace_mode: "default",
   base_url: "<superbasedURL from Agent Connect JSON>",
   owner_pubkey: "<ownerPubkey from Agent Connect JSON>",
   records: [
@@ -579,7 +585,7 @@ To fetch existing reviews (e.g. to check what's already been written):
 
 ```
 superbased_fetch_records(
-  app_npub: "<appNpub from Agent Connect JSON>",
+  namespace_mode: "default",
   owner_pubkey: "<ownerPubkey from Agent Connect JSON>",
   base_url: "<superbasedURL from Agent Connect JSON>",
   collection: "ai_reviews"
@@ -600,10 +606,10 @@ superbased_fetch_records(
 
 | Operation | Tool | Key Parameters |
 |-----------|------|---------------|
-| Read tasks | `superbased_fetch_records` | `app_npub`, `owner_pubkey`, `base_url`, `collection: "todos"` |
-| Create/Update tasks | `superbased_sync_records` | `app_npub`, `base_url`, `records` (with `collection: "todos"`) |
-| Read AI reviews | `superbased_fetch_records` | `app_npub`, `owner_pubkey`, `base_url`, `collection: "ai_reviews"` |
-| Write AI reviews | `superbased_sync_records` | `app_npub`, `base_url`, `records` (with `collection: "ai_reviews"`) |
+| Read tasks | `superbased_fetch_records` | `namespace_mode: "default"`, `owner_pubkey`, `base_url`, `collection: "todos"` |
+| Create/Update tasks | `superbased_sync_records` | `namespace_mode: "default"`, `base_url`, `records` (with `collection: "todos"`) |
+| Read AI reviews | `superbased_fetch_records` | `namespace_mode: "default"`, `owner_pubkey`, `base_url`, `collection: "ai_reviews"` |
+| Write AI reviews | `superbased_sync_records` | `namespace_mode: "default"`, `base_url`, `records` (with `collection: "ai_reviews"`) |
 | Check API health | `superbased_health` | `base_url` (optional) |
 | NIP-98 auth (raw) | `sign_nip98` | `url`, `method` |
 | Decrypt messages | `nip44_decrypt` | `ciphertext`, `sender_pubkey` |
