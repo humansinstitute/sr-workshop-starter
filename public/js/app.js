@@ -58,6 +58,7 @@ import {
 // Set both to enable direct lookup, or set only EXPECTED_APP_NPUB to prefer matching app tokens
 const EXPECTED_APP_NPUB = 'npub1l6j6wardt9rpt9lrjejph35j5fjv92hk8qqp07n2fkz56agu5q0q8y67k3';
 const EXPECTED_BACKEND_URL = null; // e.g., 'https://superbasedtodo.ritoh.com'
+const DEFAULT_SUPERBASED_TOKEN = 'eyJ0eXBlIjoic3VwZXJiYXNlZF9jb25uZWN0aW9uIiwidmVyc2lvbiI6MSwiaXNzdWVkX2F0IjoxNzcxOTEyMzIzLCJleHBpcmVzX2F0IjoxNzc0NTA0MzIzLCJzZXJ2ZXJfbnB1YiI6Im5wdWIxMGxjc3J4bHZ0Z3A5cHBwNjM5dGpldmdwY3h0cWNtZGR4OXF2cHJheXhnYTJ6azZweWN6cTB1emVjZSIsImh0dHAiOiJodHRwczovL3NiLm90aGVyc3R1ZmYuYWkiLCJyZWxheSI6IndzczovL3JlbGF5LmNvbnRleHR2bS5vcmciLCJzY29wZXMiOlsicmVjb3JkczpydyIsInNjaGVtYXM6ciJdLCJub3RlIjoiQ29ubmVjdGlvbiBtZXRhZGF0YSBvbmx5LiBBUEkgcmVxdWVzdHMgc3RpbGwgcmVxdWlyZSBOSVAtOTggcGVyIHJlcXVlc3QuIn0=';
 
 // Make Alpine available globally for debugging
 window.Alpine = Alpine;
@@ -1142,6 +1143,10 @@ Alpine.store('app', {
 
   async checkSuperBasedConnection() {
     let token = localStorage.getItem('superbased_token');
+    if (!token && DEFAULT_SUPERBASED_TOKEN) {
+      token = DEFAULT_SUPERBASED_TOKEN;
+      localStorage.setItem('superbased_token', token);
+    }
     if (!token) {
       token = await this.tryFetchTokenFromNostr();
     }
