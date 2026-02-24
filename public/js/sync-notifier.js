@@ -228,10 +228,11 @@ export class SyncNotifier {
 
 const DELEGATION_MANIFEST_KIND = 30078;
 const DELEGATION_RELAYS = [
-  'wss://relay.damus.io',
+  'wss://relay.nsec.app',
   'wss://nos.lol',
-  'wss://purplepag.es',
-  'wss://relay.nostr.band',
+  'wss://relay.getalby.com/v1',
+  'wss://nostr.mineracks.com',
+  'wss://relay.primal.net',
 ];
 
 export class DelegationNotifier {
